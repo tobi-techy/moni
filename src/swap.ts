@@ -201,18 +201,19 @@ export async function getSupportedTokens(): Promise<Record<string, any> | null> 
 }
 
 // Mock rates for demo (fromToken -> toToken)
+// Rates are in terms of: 1 fromToken unit (in its native decimals) = rate / 10^toDecimals toToken units
 function getMockRate(fromToken: string, toToken: string): bigint {
-  // Simplified mock rates (18 decimals)
+  // Simplified mock rates 
   const rates: Record<string, Record<string, bigint>> = {
-    '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': { // USDC
+    '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': { // USDC (6 decimals)
       '0xb200000000000000000000C2e324d24d7eEcd1fb': 5000000000000000n, // USDC -> AAPL (1 AAPL = $200, so 1 USDC = 0.005 AAPL)
       '0xb20000000000000000000078ee7ce2fE4908108C': 1111111111111111n,   // USDC -> NVDA (1 NVDA = $900, so 1 USDC = 0.00111... NVDA)
     },
-    '0xb200000000000000000000C2e324d24d7eEcd1fb': { // AAPL
-      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 200000000000000000000n, // AAPL -> USDC (1 AAPL = $200)
+    '0xb200000000000000000000C2e324d24d7eEcd1fb': { // AAPL (18 decimals)
+      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 200000000n, // AAPL -> USDC (1 AAPL = $200, rate = 200 * 1e6 = 2e8)
     },
-    '0xb20000000000000000000078ee7ce2fE4908108C': { // NVDA
-      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 900000000000000000000n, // NVDA -> USDC (1 NVDA = $900)
+    '0xb20000000000000000000078ee7ce2fE4908108C': { // NVDA (18 decimals)
+      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 900000000n, // NVDA -> USDC (1 NVDA = $900, rate = 900 * 1e6 = 9e8)
     },
   };
 
