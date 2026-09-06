@@ -80,7 +80,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 
 ### Key Features
 1. **iMessage-Native Trading** - No app download, trade in the Messages app
-2. **Coinbase Tokenized Stocks (B20)** - Direct integration with 13 tokenized stocks on Base
+2. **Coinbase Tokenized Stocks (B20)** - Direct integration with 14 tokenized stocks on Base
 3. **Agentic Portfolio Management** - Letta-powered AI agent with memory and learning
 4. **Automated Strategies** - DCA, stop-loss/take-profit, rebalancing, price alerts
 5. **Embedded Wallets** - Privy-powered, no seed phrases, email/social login
@@ -94,7 +94,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 - **Blockchain**: Viem + Base RPC (mainnet/sepolia)
 - **DEX**: 1inch API for swap aggregation
 - **Prices**: Chainlink Total Return feeds on Base
-- **Tokens**: Coinbase B20 tokenized stocks (AAPL, NVDA, MSFT, GOOGL, META, TSLA, AMZN, COIN, INTC, MSTR, CRCL, SNDK, SPCX)
+- **Tokens**: Coinbase B20 tokenized stocks (AAPL, NVDA, MSFT, GOOGL, META, TSLA, AMZN, COIN, INTC, MSTR, CRCL, SNDK, SPCX, SPX)
 
 ### Links
 - **GitHub**: [your-github-repo]

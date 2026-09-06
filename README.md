@@ -119,18 +119,19 @@ Spectrum Agent Server (Node.js/Bun)
 ## Supported Tokens (Coinbase Tokenized Stocks on Base)
 
 - **AAPL** - Apple Inc.
-- **NVDA** - NVIDIA Corporation
-- **MSFT** - Microsoft Corporation
-- **GOOGL** - Alphabet Inc.
-- **META** - Meta Platforms Inc.
-- **TSLA** - Tesla Inc.
 - **AMZN** - Amazon.com Inc.
 - **COIN** - Coinbase Global Inc.
-- **INTC** - Intel Corporation
-- **MSTR** - MicroStrategy Inc.
 - **CRCL** - Circle Internet Group
+- **GOOGL** - Alphabet Inc.
+- **INTC** - Intel Corporation
+- **META** - Meta Platforms Inc.
+- **MSFT** - Microsoft Corporation
+- **MSTR** - MicroStrategy Inc.
+- **NVDA** - NVIDIA Corporation
 - **SNDK** - Sandisk
 - **SPCX** - S&P 500 ETF
+- **SPX** - Space Exploration Technologies Corp. (SpaceX)
+- **TSLA** - Tesla Inc.
 
 ## Builder Quest Submission
 

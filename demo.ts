@@ -25,7 +25,7 @@ async function runDemo() {
   
   // Initialize demo memory
   await setTradingMemory(DEMO_USER, {
-    watchlist: ['AAPL', 'NVDA', 'MSFT', 'GOOGL', 'META'],
+    watchlist: ['AAPL', 'NVDA', 'MSFT', 'GOOGL', 'META', 'SPX'],
     riskParams: {
       maxPositionSizeUSD: 10000,
       maxDailyLossUSD: 1000,
@@ -37,7 +37,7 @@ async function runDemo() {
     ],
     preferences: {
       defaultSlippage: 1.0,
-      preferredTokens: ['AAPL', 'NVDA', 'MSFT'],
+      preferredTokens: ['AAPL', 'NVDA', 'MSFT', 'SPX'],
       notificationLevel: 'trades',
     },
     transactionHistory: [],
@@ -150,7 +150,7 @@ async function runDemo() {
   console.log('📰 "/sentiment"');
   await sleep(500);
   const { getMarketSentiment, formatSentiment } = await import('./src/automation.js');
-  const sentiments = await getMarketSentiment(['AAPL', 'NVDA', 'MSFT']);
+  const sentiments = await getMarketSentiment(['AAPL', 'NVDA', 'MSFT', 'SPX']);
   console.log(formatSentiment(sentiments));
   await sleep(1000);
 
@@ -171,14 +171,16 @@ async function runDemo() {
   await sleep(1500);
 
   // 13. Natural Language
-  console.log('🤖 "What\'s my portfolio worth and should I buy more NVDA?"');
+  console.log('🤖 "What\'s my portfolio worth and should I buy more NVDA or SPX?"');
   await sleep(500);
   console.log('🤔 Thinking...');
   await sleep(1000);
-  console.log('Your portfolio is worth ~$15,400 with 3 positions (AAPL, NVDA, MSFT).');
+  console.log('Your portfolio is worth ~$15,400 with 4 positions (AAPL, NVDA, MSFT, SPX).');
   console.log('NVDA is showing bullish sentiment with strong earnings momentum.');
-  console.log('Consider: Your NVDA allocation is 35% - within your 30% target.');
-  console.log('A small DCA increase could work, but watch the $950 resistance level.\n');
+  console.log('SpaceX (SPX) is trending up on recent launch news.');
+  console.log('Consider: Your NVDA allocation is 30% - on target.');
+  console.log('Your SPX allocation is 15% - room to grow if you believe in the space sector.');
+  console.log('A small DCA increase to NVDA or SPX could work, but watch resistance levels.\n');
   await sleep(1500);
 
   // 14. Help
