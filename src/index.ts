@@ -191,7 +191,10 @@ process.on('uncaughtException', (error) => {
 // Check if we have valid Spectrum credentials
 const hasSpectrumCredentials = PROJECT_ID && PROJECT_SECRET && PROJECT_ID.length > 10;
 
-// Create Spectrum app or run in CLI mode
+// Check if we're in an interactive TTY (for CLI mode)
+const isInteractive = process.stdin.isTTY;
+
+// Create Spectrum app or run in appropriate mode
 if (hasSpectrumCredentials) {
   const providers = DEMO_MODE === 'true'
     ? [imessage.config(), terminal.config()]
@@ -225,8 +228,8 @@ if (hasSpectrumCredentials) {
       }
     }
   }
-} else {
-  // CLI mode for demo/testing without Spectrum credentials
+} else if (isInteractive) {
+  // CLI mode for demo/testing without Spectrum credentials (only in interactive TTY)
   log.info('Moni Trading Agent (CLI Demo Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
   console.log('\nJust chat naturally. Examples:');
   console.log('  "What\'s my portfolio?"');
@@ -266,4 +269,13 @@ if (hasSpectrumCredentials) {
   rl.on('close', () => {
     shutdown('CLI close');
   });
+} else {
+  // Production mode without Spectrum credentials - keep health server running
+  log.info('Moni Trading Agent (Background Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  
+  // Start session cleanup
+  cleanupInterval = startSessionCleanup();
+
+  // Keep process alive for health checks
+  await new Promise(() => {}); // Never resolves - keeps process running
 }
