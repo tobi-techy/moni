@@ -8,6 +8,8 @@ export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const LETTA_API_KEY = process.env.LETTA_API_KEY || '';
 export const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
 export const DEMO_MODE = process.env.DEMO_MODE || 'true';
+export const SPECTRUM_WEBHOOK_SECRET = process.env.SPECTRUM_WEBHOOK_SECRET || '';
+export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3001', 10);
 
 // Validation
 export function validateEnv(): { valid: boolean; missing: string[] } {

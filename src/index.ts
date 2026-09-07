@@ -1,6 +1,8 @@
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
-import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE } from './env.js';
+import { typing } from 'spectrum-ts';
+import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
@@ -127,19 +129,19 @@ async function handlePortfolio(space: any, userId: string) {
   const walletAddress = await initializeWallet(userId);
   
   if (!walletAddress) {
-    await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
+    await sendWithTyping(space, '🔐 Please connect your wallet first. Send "/connect" to get started.');
     return;
   }
 
-  await space.send('📊 Fetching your portfolio...');
+  await sendWithTyping(space, '📊 Fetching your portfolio...');
   
   try {
     const portfolio = await getPortfolio(walletAddress);
     const message = formatPortfolioMessage(portfolio);
-    await space.send(message);
+    await sendWithTyping(space, message);
   } catch (error) {
     console.error('Portfolio error:', error);
-    await space.send('❌ Error fetching portfolio. Please try again.');
+    await sendWithTyping(space, '❌ Error fetching portfolio. Please try again.');
   }
 }
 
@@ -148,17 +150,17 @@ async function handlePrice(space: any, symbol: string) {
   const upperSymbol = symbol.toUpperCase() as B20TokenSymbol;
   
   if (!B20_TOKENS[upperSymbol]) {
-    await space.send(`❌ Unknown token: ${symbol}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
+    await sendWithTyping(space, `❌ Unknown token: ${symbol}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
     return;
   }
 
   try {
     const priceData = await getTokenPrice(upperSymbol);
     const message = formatPriceMessage(upperSymbol, priceData);
-    await space.send(message);
+    await sendWithTyping(space, message);
   } catch (error) {
     console.error('Price error:', error);
-    await space.send('❌ Error fetching price.');
+    await sendWithTyping(space, '❌ Error fetching price.');
   }
 }
 
@@ -168,14 +170,14 @@ async function handleBuy(space: any, userId: string, args: string[]) {
   const walletAddress = await initializeWallet(userId);
   
   if (!walletAddress) {
-    await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
+    await sendWithTyping(space, '🔐 Please connect your wallet first. Send "/connect" to get started.');
     return;
   }
 
   // Parse: /buy <amount> <token> [with <token>]
   // e.g., "/buy 100 USDC AAPL" or "/buy 100 AAPL"
   if (args.length < 2) {
-    await space.send('Usage: `/buy <amount> <token> [with <token>]`\nExample: `/buy 100 USDC AAPL` or `/buy 0.5 AAPL`');
+    await sendWithTyping(space, 'Usage: `/buy <amount> <token> [with <token>]`\nExample: `/buy 100 USDC AAPL` or `/buy 0.5 AAPL`');
     return;
   }
 
@@ -197,17 +199,17 @@ async function handleBuy(space: any, userId: string, args: string[]) {
   const toTokenAddress = B20_TOKENS[toToken as B20TokenSymbol];
 
   if (!toTokenAddress) {
-    await space.send(`❌ Unknown token: ${toToken}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
+    await sendWithTyping(space, `❌ Unknown token: ${toToken}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
     return;
   }
 
   // Get quote
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
+  await sendWithTyping(space, `🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
   
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 6).toString());
   
   if (!quote) {
-    await space.send('❌ Could not get quote. Please try again.');
+    await sendWithTyping(space, '❌ Could not get quote. Please try again.');
     return;
   }
 
@@ -222,7 +224,7 @@ async function handleBuy(space: any, userId: string, args: string[]) {
     amount: parseAmount(amount, 6).toString(),
   };
 
-  await space.send(
+  await sendWithTyping(space,
     `✅ **Quote Ready**\n\n` +
     `📥 You send: ${amount} ${fromToken}\n` +
     `📤 You receive: ~${toAmount} ${toToken}\n` +
@@ -237,12 +239,12 @@ async function handleSell(space: any, userId: string, args: string[]) {
   const walletAddress = await initializeWallet(userId);
   
   if (!walletAddress) {
-    await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
+    await sendWithTyping(space, '🔐 Please connect your wallet first. Send "/connect" to get started.');
     return;
   }
 
   if (args.length < 2) {
-    await space.send('Usage: `/sell <amount> <token> [for <token>]`\nExample: `/sell 10 AAPL USDC`');
+    await sendWithTyping(space, 'Usage: `/sell <amount> <token> [for <token>]`\nExample: `/sell 10 AAPL USDC`');
     return;
   }
 
@@ -261,7 +263,7 @@ async function handleSell(space: any, userId: string, args: string[]) {
   const toTokenAddress = toToken === 'USDC' ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' : B20_TOKENS[toToken as B20TokenSymbol];
 
   if (!fromTokenAddress) {
-    await space.send(`❌ Unknown token: ${fromToken}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
+    await sendWithTyping(space, `❌ Unknown token: ${fromToken}. Available: ${Object.keys(B20_TOKENS).join(', ')}`);
     return;
   }
 
@@ -270,16 +272,16 @@ async function handleSell(space: any, userId: string, args: string[]) {
   const holding = portfolio.find((h: { symbol: string }) => h.symbol === fromToken);
   
   if (!holding || holding.scaledBalance < parseAmount(amount, 18)) {
-    await space.send(`❌ Insufficient ${fromToken} balance. You have ${formatBalance(holding?.scaledBalance || 0n, 18)}`);
+    await sendWithTyping(space, `❌ Insufficient ${fromToken} balance. You have ${formatBalance(holding?.scaledBalance || 0n, 18)}`);
     return;
   }
 
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
+  await sendWithTyping(space, `🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
   
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());
   
   if (!quote) {
-    await space.send('❌ Could not get quote.');
+    await sendWithTyping(space, '❌ Could not get quote.');
     return;
   }
 
@@ -293,7 +295,7 @@ async function handleSell(space: any, userId: string, args: string[]) {
     amount: parseAmount(amount, 18).toString(),
   };
 
-  await space.send(
+  await sendWithTyping(space,
     `✅ **Quote Ready**\n\n` +
     `📥 You send: ${amount} ${fromToken}\n` +
     `📤 You receive: ~${toAmount} ${toToken}\n` +
@@ -307,7 +309,7 @@ async function handleConfirm(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.state !== 'awaiting_confirmation' || !session.pendingTrade) {
-    await space.send('❌ No pending trade to confirm.');
+    await sendWithTyping(space, '❌ No pending trade to confirm.');
     return;
   }
 
@@ -315,7 +317,7 @@ async function handleConfirm(space: any, userId: string) {
   
   if (DEMO_MODE === 'true') {
     // Demo mode: simulate trade
-    await space.send('⏳ **Executing trade (demo mode)...**');
+    await sendWithTyping(space, '⏳ **Executing trade (demo mode)...**');
     
     // Simulate delay
     await new Promise(r => setTimeout(r, 2000));
@@ -324,7 +326,7 @@ async function handleConfirm(space: any, userId: string) {
     const fromSymbol = Object.entries(B20_TOKENS).find(([_, v]) => v === fromToken)?.[0] || 'USDC';
     const toSymbol = Object.entries(B20_TOKENS).find(([_, v]) => v === toToken)?.[0] || 'USDC';
     
-    await space.send(
+    await sendWithTyping(space,
       `✅ **Trade Executed (Demo)**\n\n` +
       `📥 Sent: ${formatAmount(BigInt(amount), fromSymbol === 'USDC' ? 6 : 18)} ${fromSymbol}\n` +
       `📥 Received: ~${formatAmount(BigInt(amount), toSymbol === 'USDC' ? 6 : 18)} ${toSymbol}\n` +
@@ -333,7 +335,7 @@ async function handleConfirm(space: any, userId: string) {
     );
   } else {
     // Real trade execution would go here
-    await space.send('⚠️ Real trading not yet implemented. Set DEMO_MODE=false and configure 1inch API.');
+    await sendWithTyping(space, '⚠️ Real trading not yet implemented. Set DEMO_MODE=false and configure 1inch API.');
   }
 
   session.state = 'idle';
@@ -345,14 +347,14 @@ async function handleCancel(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.state !== 'awaiting_confirmation') {
-    await space.send('❌ No pending trade to cancel.');
+    await sendWithTyping(space, '❌ No pending trade to cancel.');
     return;
   }
 
   session.state = 'idle';
   session.pendingTrade = undefined;
   
-  await space.send('❌ Trade cancelled.');
+  await sendWithTyping(space, '❌ Trade cancelled.');
 }
 
 // Handle watchlist
@@ -365,21 +367,21 @@ async function handleWatchlist(space: any, userId: string, args: string[]) {
       if (!memory.watchlist.includes(symbol)) {
         memory.watchlist.push(symbol);
         await setTradingMemory(userId, { watchlist: memory.watchlist });
-        await space.send(`✅ Added ${symbol} to watchlist.`);
+        await sendWithTyping(space, `✅ Added ${symbol} to watchlist.`);
       } else {
-        await space.send(`${symbol} is already in your watchlist.`);
+        await sendWithTyping(space, `${symbol} is already in your watchlist.`);
       }
     } else {
-      await space.send(`❌ Unknown token: ${symbol}`);
+      await sendWithTyping(space, `❌ Unknown token: ${symbol}`);
     }
   } else if (args[0] === 'remove' && args[1]) {
     const symbol = args[1].toUpperCase();
     memory.watchlist = memory.watchlist.filter((s: string) => s !== symbol);
     await setTradingMemory(userId, { watchlist: memory.watchlist });
-    await space.send(`✅ Removed ${symbol} from watchlist.`);
+    await sendWithTyping(space, `✅ Removed ${symbol} from watchlist.`);
   } else {
     // Show watchlist with prices
-    await space.send('📋 Fetching watchlist prices...');
+    await sendWithTyping(space, '📋 Fetching watchlist prices...');
     
     const prices = await Promise.all(
       memory.watchlist.map(async (symbol: string) => {
@@ -392,7 +394,7 @@ async function handleWatchlist(space: any, userId: string, args: string[]) {
       })
     );
     
-    await space.send(`📋 **Your Watchlist**\n\n${prices.join('\n')}`);
+    await sendWithTyping(space, `📋 **Your Watchlist**\n\n${prices.join('\n')}`);
   }
 }
 
@@ -408,7 +410,7 @@ async function handleDCA(space: any, userId: string, args: string[]) {
     const frequency = args[3].toLowerCase();
     
     if (!B20_TOKENS[token as B20TokenSymbol]) {
-      await space.send(`❌ Unknown token: ${token}`);
+      await sendWithTyping(space, `❌ Unknown token: ${token}`);
       return;
     }
 
@@ -421,7 +423,7 @@ async function handleDCA(space: any, userId: string, args: string[]) {
     memory.activeStrategies.push(strategy);
     await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
     
-    await space.send(
+    await sendWithTyping(space,
       `✅ **DCA Strategy Created**\n\n` +
       `💰 Amount: ${amount} USDC\n` +
       `📈 Token: ${token}\n` +
@@ -432,7 +434,7 @@ async function handleDCA(space: any, userId: string, args: string[]) {
     const dcaStrategies = memory.activeStrategies.filter((s: { type: string }) => s.type === 'dca');
     
     if (dcaStrategies.length === 0) {
-      await space.send('📭 No active DCA strategies. Create one with `/dca create <amount> <token> <frequency>`');
+      await sendWithTyping(space, '📭 No active DCA strategies. Create one with `/dca create <amount> <token> <frequency>`');
       return;
     }
     
@@ -441,7 +443,7 @@ async function handleDCA(space: any, userId: string, args: string[]) {
       message += `${i + 1}. ${s.params.amount} USDC → ${s.params.token} (${s.params.frequency}) - ${s.active ? '🟢 Active' : '🔴 Paused'}\n`;
     });
     
-    await space.send(message);
+    await sendWithTyping(space, message);
   } else if (args[0] === 'pause' && args[1]) {
     const index = parseInt(args[1]) - 1;
     const dcaStrategies = memory.activeStrategies.filter((s: { type: string }) => s.type === 'dca');
@@ -449,12 +451,12 @@ async function handleDCA(space: any, userId: string, args: string[]) {
     if (dcaStrategies[index]) {
       dcaStrategies[index].active = false;
       await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
-      await space.send('⏸️ DCA strategy paused.');
+      await sendWithTyping(space, '⏸️ DCA strategy paused.');
     } else {
-      await space.send('❌ Invalid strategy number.');
+      await sendWithTyping(space, '❌ Invalid strategy number.');
     }
   } else {
-    await space.send(
+    await sendWithTyping(space,
       `🔄 **DCA Commands**\n\n` +
       `• \`/dca create <amount> <token> <frequency>\` - Create DCA\n` +
       `  Example: \`/dca create 50 USDC AAPL weekly\`\n` +
@@ -473,12 +475,12 @@ async function handleAlert(space: any, userId: string, args: string[]) {
     const price = parseFloat(args[3]);
     
     if (!B20_TOKENS[token as B20TokenSymbol]) {
-      await space.send(`❌ Unknown token: ${token}`);
+      await sendWithTyping(space, `❌ Unknown token: ${token}`);
       return;
     }
     
     if (!['above', 'below'].includes(direction)) {
-      await space.send('❌ Direction must be "above" or "below"');
+      await sendWithTyping(space, '❌ Direction must be "above" or "below"');
       return;
     }
     
@@ -494,7 +496,7 @@ async function handleAlert(space: any, userId: string, args: string[]) {
     (memory.activeStrategies as any[]).push(alert);
     await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
     
-    await space.send(
+    await sendWithTyping(space,
       `🔔 **Price Alert Created**\n\n` +
       `📈 Token: ${token}\n` +
       `📊 Trigger: Price goes ${direction} $${price.toFixed(2)}\n` +
@@ -504,7 +506,7 @@ async function handleAlert(space: any, userId: string, args: string[]) {
     const alerts = (await getTradingMemory(userId)).activeStrategies.filter((s: any) => s.type === 'price_alert');
     
     if (alerts.length === 0) {
-      await space.send('📭 No active alerts. Create one with `/alert create <token> <above|below> <price>`');
+      await sendWithTyping(space, '📭 No active alerts. Create one with `/alert create <token> <above|below> <price>`');
       return;
     }
     
@@ -513,9 +515,9 @@ async function handleAlert(space: any, userId: string, args: string[]) {
       message += `${i + 1}. ${a.params.token} ${a.params.direction} $${a.params.price.toFixed(2)} - ${a.active ? '🟢' : '🔴'}\n`;
     });
     
-    await space.send(message);
+    await sendWithTyping(space, message);
   } else {
-    await space.send(
+    await sendWithTyping(space,
       `🔔 **Alert Commands**\n\n` +
       `• \`/alert create <token> <above|below> <price>\` - Create price alert\n` +
       `  Example: \`/alert create AAPL above 200\`\n` +
@@ -528,14 +530,14 @@ async function handleAlert(space: any, userId: string, args: string[]) {
 async function handleAnalytics(space: any, userId: string, args: string[]) {
   if (args[0] === 'changes' || args[0] === 'price' || args[0] === '24h') {
     const message = await getPriceChanges(userId);
-    await space.send(message);
+    await sendWithTyping(space, message);
     return;
   }
   
   // Default: full portfolio analytics
   const analytics = await analyzePortfolio(userId);
   const message = formatAnalytics(analytics);
-  await space.send(message);
+  await sendWithTyping(space, message);
 }
 
 // Handle history
@@ -543,12 +545,12 @@ async function handleHistory(space: any, userId: string, args: string[]) {
   const limit = args[0] ? parseInt(args[0]) : 20;
   const txs = await getTransactionHistory(userId, limit);
   const message = formatTransactionHistory(txs);
-  await space.send(message);
+  await sendWithTyping(space, message);
 }
 
 // Handle help
 async function handleHelp(space: any) {
-  await space.send(
+  await sendWithTyping(space,
     `🤖 **Moni - Your iMessage Trading Agent**\n\n` +
     `**Portfolio & Prices**\n` +
     `• \`/portfolio\` - View your holdings\n` +
@@ -583,7 +585,7 @@ async function handleConnect(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.authenticated && session.walletAddress) {
-    await space.send(
+    await sendWithTyping(space,
       `✅ **Wallet Connected**\n\n` +
       `Address: ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\n\n` +
       `You're ready to trade! Try \`/portfolio\` or \`/price AAPL\``
@@ -597,7 +599,7 @@ async function handleConnect(space: any, userId: string) {
     session.walletAddress = demoAddress;
     session.authenticated = true;
     
-    await space.send(
+    await sendWithTyping(space,
       `✅ **Demo Wallet Connected**\n\n` +
       `Address: ${demoAddress.slice(0, 6)}...${demoAddress.slice(-4)}\n\n` +
       `You're in demo mode - all trades are simulated.\n` +
@@ -605,7 +607,7 @@ async function handleConnect(space: any, userId: string) {
     );
   } else {
     // Real mode: send Privy connection link
-    await space.send(
+    await sendWithTyping(space,
       `🔐 **Connect Your Wallet**\n\n` +
       `Click the link below to connect your wallet via Privy:\n` +
       `https://auth.privy.io/connect?app_id=${process.env.PRIVY_APP_ID}\n\n` +
@@ -614,16 +616,30 @@ async function handleConnect(space: any, userId: string) {
   }
 }
 
+// Helper to send a message with typing indicator
+async function sendWithTyping(space: any, content: string | any) {
+  // Start typing indicator
+  await space.send(typing('start'));
+  
+  try {
+    // Send the actual content
+    await space.send(content);
+  } finally {
+    // Stop typing indicator
+    await space.send(typing('stop'));
+  }
+}
+
 // Handle natural language via Letta agent
 async function handleNaturalLanguage(space: any, userId: string, message: string) {
-  await space.send('🤔 Thinking...');
+  await sendWithTyping(space, '🤔 Thinking...');
   
   try {
     const response = await sendAgentMessage(userId, message);
-    await space.send(response);
+    await sendWithTyping(space, response);
   } catch (error) {
     console.error('Agent error:', error);
-    await space.send('❌ Sorry, I had trouble processing that. Try a command or ask again.');
+    await sendWithTyping(space, '❌ Sorry, I had trouble processing that. Try a command or ask again.');
   }
 }
 
@@ -742,22 +758,78 @@ if (hasSpectrumCredentials) {
     projectId: PROJECT_ID,
     projectSecret: PROJECT_SECRET,
     providers,
+    webhookSecret: SPECTRUM_WEBHOOK_SECRET || undefined,
   });
 
   console.log('🚀 Moni iMessage Trading Agent started!');
   console.log(`📱 Demo mode: ${DEMO_MODE}`);
   console.log(`🌐 Base RPC: ${BASE_RPC_URL}`);
 
-  // Handle incoming messages
-  for await (const [space] of app.messages) {
+  // Start webhook server if webhook secret is configured
+  if (SPECTRUM_WEBHOOK_SECRET) {
+    const webhookServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url?.endsWith('/spectrum/webhook')) {
+        // Collect raw body for HMAC verification
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks);
+        
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value) headers[key] = Array.isArray(value) ? value[0] : value;
+        }
+        
+        try {
+          const result = await app.webhook(
+            { body, headers },
+            async (space: any, message: any) => {
+              // Handle message (fire-and-forget)
+              if (message.content?.type === 'text' && message.content.text) {
+                const userId = space.user?.id || space.id || 'unknown';
+                await handleMessage(space, userId, message.content.text);
+              }
+            }
+          );
+          
+          res.writeHead(result.status, result.headers);
+          res.end(Buffer.from(result.body));
+        } catch (error) {
+          console.error('Webhook error:', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+        return;
+      }
+      
+      // Health check endpoint
+      if (req.method === 'GET' && req.url?.endsWith('/health')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+        return;
+      }
+      
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    });
+    
+    webhookServer.listen(WEBHOOK_PORT, () => {
+      console.log(`🔗 Webhook server listening on port ${WEBHOOK_PORT} (POST /spectrum/webhook)`);
+      console.log(`🏥 Health check: GET /health`);
+    });
+  }
+
+  // Handle incoming messages via streaming
+  for await (const [space, message] of app.messages) {
+    // Skip outbound messages (our own responses)
+    if (message.direction === 'outbound') continue;
+    
     // @ts-ignore - Spectrum space types
     const userId = space.user?.id || space.id || 'unknown';
     
-    // @ts-ignore - Spectrum space types
-    for await (const message of space.messages) {
-      if (message.text) {
-        await handleMessage(space, userId, message.text);
-      }
+    if (message.content?.type === 'text' && message.content.text) {
+      await handleMessage(space, userId, message.content.text);
     }
   }
 } else {
@@ -778,6 +850,9 @@ if (hasSpectrumCredentials) {
   const demoUserId = 'demo-user';
   let space: any = {
     send: async (text: string) => console.log(`\n🤖 ${text}\n`),
+    // Mock typing for CLI mode
+    startTyping: async () => {},
+    stopTyping: async () => {},
   };
 
   rl.prompt();
