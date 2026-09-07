@@ -1,12 +1,15 @@
 import { getPortfolio, getTokenPrice, getB20Address, formatUSD, formatBalance, B20TokenSymbol, B20_TOKENS } from './base.js';
-import { getSwapQuote, parseAmount, formatAmount } from './swap.js';
+import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
 import { analyzePortfolio, PortfolioAnalytics } from './analytics.js';
 import { checkStopLosses, getActiveStopLosses, StopLossConfig } from './automation.js';
 import { checkRebalanceNeeded } from './automation.js';
-import { getUserWalletAddress } from './wallet.js';
+import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction } from './history.js';
-import { type Address } from 'viem';
+import { DEMO_MODE } from './env.js';
+import { type Address, createPublicClient, http } from 'viem';
+import { base, baseSepolia } from 'viem/chains';
+import { BASE_RPC_URL } from './env.js';
 
 // Tool result types
 export interface ToolResult<T = any> {
@@ -187,7 +190,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
   try {
     const memory = await getTradingMemory(userId);
     const pendingQuote = (memory as any).pendingQuote;
-    
+
     if (!pendingQuote || pendingQuote.id !== quoteId) {
       return { success: false, error: 'No pending quote found. Get a fresh quote first.' };
     }
@@ -197,13 +200,76 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       return { success: false, error: 'Wallet not connected.' };
     }
 
-    // In demo mode, simulate the trade
-    const { fromTokenSymbol, toTokenSymbol, fromAmount, toAmount } = pendingQuote;
-    
-    // Simulate trade execution
-    await new Promise(r => setTimeout(r, 1500));
+    const { fromTokenSymbol, toTokenSymbol, fromAmount, toAmount, fromToken, toToken } = pendingQuote;
 
-    // Record transaction
+    // ─── Demo mode: simulate the trade ───
+    if (DEMO_MODE === 'true') {
+      await new Promise(r => setTimeout(r, 1500));
+
+      const tx: Omit<Transaction, 'id'> = {
+        timestamp: Date.now(),
+        type: fromTokenSymbol === 'USDC' ? 'buy' : 'sell',
+        fromToken: fromTokenSymbol,
+        toToken: toTokenSymbol,
+        fromAmount: BigInt(fromAmount),
+        toAmount: BigInt(toAmount),
+        fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : 18),
+        toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : 18),
+        priceUSD: Number(toAmount) / Number(fromAmount),
+        txHash: `0x${Math.random().toString(16).slice(2).padStart(62, '0')}`,
+        status: 'confirmed',
+        gasUsed: BigInt(pendingQuote.estimatedGas || 150000),
+        gasPrice: 1000000000n,
+      };
+
+      await addTransaction(userId, tx);
+      delete (memory as any).pendingQuote;
+      await setTradingMemory(userId, memory as any);
+
+      return {
+        success: true,
+        data: {
+          transaction: tx,
+          message: `Trade executed (demo): ${tx.fromAmountFormatted} ${tx.fromToken} → ${tx.toAmountFormatted} ${tx.toToken}`
+        }
+      };
+    }
+
+    // ─── Production mode: real onchain execution ───
+    const walletClient = await getUserWalletClient(userId);
+    if (!walletClient) {
+      return { success: false, error: 'Could not create wallet client. Check Privy configuration.' };
+    }
+
+    // Get swap transaction data from 1inch
+    const swapTx = await getSwapTransaction(
+      fromToken,
+      toToken,
+      fromAmount,
+      walletAddress,
+      pendingQuote.slippage || 1.0
+    );
+
+    if (!swapTx) {
+      return { success: false, error: 'Could not get swap transaction data from 1inch.' };
+    }
+
+    // Submit transaction via wallet client
+    const txHash = await walletClient.sendTransaction({
+      account: walletAddress,
+      to: swapTx.to as Address,
+      data: swapTx.data as `0x${string}`,
+      value: BigInt(swapTx.value || '0'),
+      gas: BigInt(swapTx.gas || '200000'),
+      gasPrice: BigInt(swapTx.gasPrice || '1000000000'),
+      chain: walletClient.chain,
+    });
+
+    // Wait for transaction confirmation
+    const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
+    const publicClient = createPublicClient({ chain, transport: http(BASE_RPC_URL) });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
     const tx: Omit<Transaction, 'id'> = {
       timestamp: Date.now(),
       type: fromTokenSymbol === 'USDC' ? 'buy' : 'sell',
@@ -213,24 +279,30 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       toAmount: BigInt(toAmount),
       fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : 18),
       toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : 18),
-      priceUSD: Number(toAmount) / Number(fromAmount), // Simplified
-      txHash: `0x${'demo'.padStart(62, '0')}`,
-      status: 'confirmed',
-      gasUsed: BigInt(pendingQuote.estimatedGas || 150000),
-      gasPrice: 1000000000n,
+      priceUSD: Number(toAmount) / Number(fromAmount),
+      txHash: txHash,
+      status: receipt.status === 'success' ? 'confirmed' : 'failed',
+      gasUsed: receipt.gasUsed || BigInt(pendingQuote.estimatedGas || 150000),
+      gasPrice: receipt.effectiveGasPrice || 1000000000n,
     };
-    
-    await addTransaction(userId, tx);
 
-    // Clear pending quote
+    await addTransaction(userId, tx);
     delete (memory as any).pendingQuote;
     await setTradingMemory(userId, memory as any);
+
+    if (tx.status === 'failed') {
+      return {
+        success: false,
+        error: `Transaction failed onchain. Tx: ${txHash}`,
+        data: { transaction: tx }
+      };
+    }
 
     return {
       success: true,
       data: {
         transaction: tx,
-        message: `Trade executed: ${tx.fromAmountFormatted} ${tx.fromToken} → ${tx.toAmountFormatted} ${tx.toToken}`
+        message: `Trade executed onchain: ${tx.fromAmountFormatted} ${tx.fromToken} → ${tx.toAmountFormatted} ${tx.toToken}. Tx: ${txHash.slice(0, 10)}...`
       }
     };
   } catch (error) {
