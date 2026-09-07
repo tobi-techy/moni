@@ -312,7 +312,7 @@ export async function sendAgentMessage(userId: string, message: string): Promise
 
 // Demo mode handler - manually routes to appropriate tools
 async function handleDemoMessage(userId: string, message: string): Promise<string> {
-  const { executeTool } = await import('./agent-tools.ts');
+  const { executeTool } = await import('./agent-tools.js');
   // ToolName is a type-only export, use it directly in the cast
   const lower = message.toLowerCase();
   

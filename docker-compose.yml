@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  moni:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - DEMO_MODE=true
+      - NODE_ENV=production
+      - PORT=3000
+      # Add your API keys here for local testing with real services
+      # - PROJECT_ID=${PROJECT_ID}
+      # - PROJECT_SECRET=${PROJECT_SECRET}
+      # - PRIVY_APP_ID=${PRIVY_APP_ID}
+      # - PRIVY_APP_SECRET=${PRIVY_APP_SECRET}
+      # - BASE_RPC_URL=${BASE_RPC_URL}
+      # - ONEINCH_API_KEY=${ONEINCH_API_KEY}
+      # - LETTA_API_KEY=${LETTA_API_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Optional: Run with Spectrum credentials for iMessage testing
+  # moni-imessage:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     - DEMO_MODE=false
+  #     - NODE_ENV=production
+  #     - PORT=3000
+  #     - PROJECT_ID=${PROJECT_ID}
+  #     - PROJECT_SECRET=${PROJECT_SECRET}
+  #     - PRIVY_APP_ID=${PRIVY_APP_ID}
+  #     - PRIVY_APP_SECRET=${PRIVY_APP_SECRET}
+  #     - BASE_RPC_URL=${BASE_RPC_URL}
+  #     - ONEINCH_API_KEY=${ONEINCH_API_KEY}
+  #     - LETTA_API_KEY=${LETTA_API_KEY}
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 10s
+  #   restart: unless-stopped

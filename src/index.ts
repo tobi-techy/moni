@@ -5,12 +5,23 @@ import { BASE_RPC_URL } from './env.js';
 import { handleConversation, ensureWalletConnected } from './conversation.js';
 import { startProactiveMonitoring } from './proactive.js';
 import { getUserWalletAddress } from './wallet.js';
+import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
+
+// Structured logging
+const log = {
+  info: (msg: string, meta?: Record<string, any>) => console.log(JSON.stringify({ level: 'info', msg, ...meta, timestamp: new Date().toISOString() })),
+  warn: (msg: string, meta?: Record<string, any>) => console.warn(JSON.stringify({ level: 'warn', msg, ...meta, timestamp: new Date().toISOString() })),
+  error: (msg: string, meta?: Record<string, any>) => console.error(JSON.stringify({ level: 'error', msg, ...meta, timestamp: new Date().toISOString() })),
+};
+
+// Start health check server for AtlasFlow/container orchestration
+await startHealthServer();
 
 // Validate environment on startup
 const envValidation = validateEnv();
 if (!envValidation.valid && DEMO_MODE !== 'true') {
-  console.error('Missing required environment variables:', envValidation.missing);
+  log.error('Missing required environment variables', { missing: envValidation.missing });
   process.exit(1);
 }
 
@@ -21,6 +32,10 @@ const userSessions = new Map<string, {
   lastActive: number;
 }>();
 
+// Session cleanup interval (5 minutes)
+const SESSION_TTL = 5 * 60 * 1000;
+const CLEANUP_INTERVAL = 5 * 60 * 1000;
+
 function getSession(userId: string) {
   let session = userSessions.get(userId);
   if (!session) {
@@ -29,6 +44,23 @@ function getSession(userId: string) {
   }
   session.lastActive = Date.now();
   return session;
+}
+
+// Periodic cleanup of stale sessions
+function startSessionCleanup(): NodeJS.Timeout {
+  return setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [userId, session] of userSessions.entries()) {
+      if (now - session.lastActive > SESSION_TTL) {
+        userSessions.delete(userId);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      log.info('Cleaned up stale sessions', { count: cleaned, remaining: userSessions.size });
+    }
+  }, CLEANUP_INTERVAL);
 }
 
 async function initializeWallet(userId: string): Promise<Address | null> {
@@ -47,8 +79,36 @@ async function initializeWallet(userId: string): Promise<Address | null> {
   return walletAddress;
 }
 
+// Rate limiting (simple in-memory, per user)
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 30; // 30 messages per minute
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const limit = rateLimits.get(userId);
+  
+  if (!limit || now > limit.resetAt) {
+    rateLimits.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  
+  if (limit.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  
+  limit.count++;
+  return true;
+}
+
 // Main message handler - conversational
 async function handleMessage(space: any, userId: string, text: string) {
+  // Rate limiting
+  if (!checkRateLimit(userId)) {
+    await space.send('⚠️ Too many messages. Please slow down.');
+    return;
+  }
+
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
@@ -87,13 +147,54 @@ async function handleMessage(space: any, userId: string, text: string) {
   }
 
   // Delegate to conversational handler
-  await handleConversation(space, userId, text);
+  try {
+    await handleConversation(space, userId, text);
+  } catch (error) {
+    log.error('Error handling message', { userId, error: (error as Error).message });
+    await space.send('❌ Something went wrong. Please try again.');
+  }
 }
+
+// Graceful shutdown handler
+let isShuttingDown = false;
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+async function shutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  log.info(`Received ${signal}, starting graceful shutdown...`);
+  
+  // Stop session cleanup
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+  }
+  
+  // Clear sessions
+  userSessions.clear();
+  rateLimits.clear();
+  
+  log.info('Shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled rejection', { reason: String(reason) });
+});
+process.on('uncaughtException', (error) => {
+  log.error('Uncaught exception', { error: error.message, stack: error.stack });
+  shutdown('uncaughtException');
+});
 
 // Check if we have valid Spectrum credentials
 const hasSpectrumCredentials = PROJECT_ID && PROJECT_SECRET && PROJECT_ID.length > 10;
 
-// Create Spectrum app or run in CLI mode
+// Check if we're in an interactive TTY (for CLI mode)
+const isInteractive = process.stdin.isTTY;
+
+// Create Spectrum app or run in appropriate mode
 if (hasSpectrumCredentials) {
   const providers = DEMO_MODE === 'true'
     ? [imessage.config(), terminal.config()]
@@ -105,15 +206,14 @@ if (hasSpectrumCredentials) {
     providers,
   });
 
-  console.log('🚀 Moni iMessage Trading Agent started!');
-  console.log(`📱 Demo mode: ${DEMO_MODE}`);
-  console.log(`🌐 Base RPC: ${BASE_RPC_URL}`);
+  log.info('Moni iMessage Trading Agent started', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+
+  // Start session cleanup
+  cleanupInterval = startSessionCleanup();
 
   // Start proactive monitoring in background
   if (DEMO_MODE === 'true') {
-    // In demo mode, we'll simulate proactive checks
-    // In production, this would send real iMessages
-    console.log('🔄 Proactive monitoring enabled (demo mode)');
+    log.info('Proactive monitoring enabled (demo mode)');
   }
 
   // Handle incoming messages
@@ -128,11 +228,9 @@ if (hasSpectrumCredentials) {
       }
     }
   }
-} else {
-  // CLI mode for demo/testing without Spectrum credentials
-  console.log('🚀 Moni Trading Agent (CLI Demo Mode)');
-  console.log(`📱 Demo mode: ${DEMO_MODE}`);
-  console.log(`🌐 Base RPC: ${BASE_RPC_URL}`);
+} else if (isInteractive) {
+  // CLI mode for demo/testing without Spectrum credentials (only in interactive TTY)
+  log.info('Moni Trading Agent (CLI Demo Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
   console.log('\nJust chat naturally. Examples:');
   console.log('  "What\'s my portfolio?"');
   console.log('  "Buy $100 of AAPL with USDC"');
@@ -166,4 +264,18 @@ if (hasSpectrumCredentials) {
     }
     rl.prompt();
   });
+  
+  // Handle CLI shutdown
+  rl.on('close', () => {
+    shutdown('CLI close');
+  });
+} else {
+  // Production mode without Spectrum credentials - keep health server running
+  log.info('Moni Trading Agent (Background Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  
+  // Start session cleanup
+  cleanupInterval = startSessionCleanup();
+
+  // Keep process alive for health checks
+  await new Promise(() => {}); // Never resolves - keeps process running
 }
