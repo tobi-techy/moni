@@ -104,6 +104,12 @@ class LettaClient {
       return this.getMockResponse<T>(endpoint, options);
     }
 
+    // Check if API key is configured
+    if (!this.apiKey) {
+      console.warn('LETTA_API_KEY not configured, falling back to demo mode');
+      return this.getMockResponse<T>(endpoint, options);
+    }
+
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       ...options,
       headers: {
@@ -114,6 +120,15 @@ class LettaClient {
     });
 
     if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`Letta API error: ${response.status} ${response.statusText}`, { endpoint, error: errorText });
+      
+      // Fall back to demo mode on 4xx/5xx errors
+      if (response.status >= 400) {
+        console.warn('Falling back to demo mode due to API error');
+        return this.getMockResponse<T>(endpoint, options);
+      }
+      
       throw new Error(`Letta API error: ${response.status} ${response.statusText}`);
     }
 
@@ -162,8 +177,11 @@ class LettaClient {
 
   // Create or get agent for a user
   async getOrCreateAgent(userId: string): Promise<LettaAgent> {
+    // Sanitize userId for agent name (Letta may not accept special chars)
+    const sanitizedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    
     const agentConfig = {
-      name: `Moni Trading Agent - ${userId}`,
+      name: `Moni Trading Agent - ${sanitizedUserId}`,
       persona: MONI_PERSONA,
       human: MONI_HUMAN_TEMPLATE(userId),
       system: MONI_SYSTEM_PROMPT,
