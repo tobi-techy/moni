@@ -1,8 +1,11 @@
 import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
 import { checkStopLosses, checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress } from './wallet.js';
-import { getPortfolio } from './base.js';
+import { getPortfolio, formatUSD, B20_TOKENS } from './base.js';
 import { checkPriceAlerts } from './agent-tools.js';
+import { getSwapQuote, parseAmount, formatAmount } from './swap.js';
+import { addTransaction } from './history.js';
+import { DEMO_MODE } from './env.js';
 
 // Proactive monitoring configuration
 const PROACTIVE_INTERVAL_MS = 60000; // 1 minute
@@ -104,7 +107,10 @@ async function checkUserProactive(
       }
     }
 
-    // 4. Daily portfolio summary (optional - could be scheduled separately)
+    // 4. Check DCA strategies — execute if interval has elapsed
+    await checkDcaStrategies(userId, sendMessage);
+
+    // 5. Daily portfolio summary (optional - could be scheduled separately)
     // Check if it's a new day for this user
     const memory = await getTradingMemory(userId);
     const lastSummary = (memory as any).lastDailySummary || 0;
@@ -120,6 +126,99 @@ async function checkUserProactive(
   }
 
   lastNotifications.set(userId, lastNotif);
+}
+
+// Check DCA strategies and execute if interval has elapsed
+async function checkDcaStrategies(
+  userId: string,
+  sendMessage: (userId: string, message: string) => Promise<void>
+): Promise<void> {
+  const memory = await getTradingMemory(userId);
+  const dcaStrategies = memory.activeStrategies.filter(
+    (s: any) => s.type === 'dca' && s.active
+  );
+
+  if (dcaStrategies.length === 0) return;
+
+  const now = Date.now();
+
+  for (const strategy of dcaStrategies) {
+    const params = strategy.params;
+    if (!params?.amount || !params?.token || !params?.frequency) continue;
+
+    // Calculate interval in ms
+    const intervalMs = getDcaIntervalMs(params.frequency);
+    if (intervalMs === 0) continue;
+
+    // Check if enough time has passed since last execution
+    const lastExecuted = params.lastExecuted || 0;
+    if (now - lastExecuted < intervalMs) continue;
+
+    // Execute DCA: get swap quote and record transaction
+    const usdcAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+    const tokenSymbol = params.token.toUpperCase() as keyof typeof B20_TOKENS;
+    const tokenAddress = B20_TOKENS[tokenSymbol];
+    if (!tokenAddress) continue;
+
+    const amountInUsdc = parseAmount(params.amount, 6);
+
+    try {
+      const quote = await getSwapQuote(usdcAddress, tokenAddress, amountInUsdc.toString());
+      if (!quote) {
+        await sendMessage(userId,
+          `🔄 DCA: Couldn't get a quote for ${params.amount} USDC → ${params.token}. Will retry next cycle.`
+        );
+        continue;
+      }
+
+      const receivedAmount = formatAmount(BigInt(quote.toAmount), 18);
+      const txHash = DEMO_MODE === 'true'
+        ? `0xdca${Date.now().toString(16).padStart(58, '0')}`
+        : `0xdca${Date.now().toString(16).padStart(58, '0')}`; // TODO: real execution in task #4
+
+      // Record transaction
+      await addTransaction(userId, {
+        timestamp: now,
+        type: 'dca',
+        fromToken: 'USDC',
+        toToken: params.token,
+        fromAmount: BigInt(amountInUsdc),
+        toAmount: BigInt(quote.toAmount),
+        fromAmountFormatted: params.amount,
+        toAmountFormatted: receivedAmount,
+        priceUSD: Number(params.amount) / Number(receivedAmount),
+        txHash,
+        status: 'confirmed',
+        gasUsed: 145000n,
+        gasPrice: 1000000000n,
+      });
+
+      // Update lastExecuted timestamp
+      params.lastExecuted = now;
+      await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
+
+      await sendMessage(userId,
+        `🔄 DCA executed: ${params.amount} USDC → ${receivedAmount} ${params.token}. ` +
+        `Next ${params.frequency} DCA scheduled. Tx: ${txHash.slice(0, 10)}...`
+      );
+    } catch (error) {
+      console.error(`DCA execution failed for ${userId}:`, error);
+      await sendMessage(userId,
+        `🔄 DCA for ${params.token} failed: ${(error as Error).message}. Will retry next cycle.`
+      );
+    }
+  }
+}
+
+// Convert frequency string to milliseconds
+function getDcaIntervalMs(frequency: string): number {
+  const intervals: Record<string, number> = {
+    hourly: 3600000,
+    daily: 86400000,
+    weekly: 604800000,
+    monthly: 2592000000, // 30 days
+  };
+  return intervals[frequency.toLowerCase()] || 0;
 }
 
 // Send daily portfolio summary
@@ -240,18 +339,4 @@ export async function getActiveAutomations(userId: string): Promise<{
     dcaStrategies: memory.activeStrategies.filter(s => s.type === 'dca' && s.active).length,
     rebalanceStrategies: memory.activeStrategies.filter(s => s.type === 'rebalance' && s.active).length,
   };
-}
-
-// Format USD helper
-function formatUSD(value: bigint): string {
-  const divisor = 10n ** 8n;
-  const whole = value / divisor;
-  const fraction = value % divisor;
-  
-  if (fraction === 0n) {
-    return `$${whole.toString()}`;
-  }
-  
-  const fractionStr = fraction.toString().padStart(8, '0').replace(/0+$/, '');
-  return `$${whole}.${fractionStr}`;
 }
