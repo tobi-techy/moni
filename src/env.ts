@@ -7,6 +7,7 @@ export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.or
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const LETTA_API_KEY = process.env.LETTA_API_KEY || '';
 export const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
+export const LETTA_MODEL = process.env.LETTA_MODEL || 'anthropic/claude-sonnet-4-5';
 export const DEMO_MODE = process.env.DEMO_MODE || 'true';
 export const SPECTRUM_WEBHOOK_SECRET = process.env.SPECTRUM_WEBHOOK_SECRET || '';
 export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3001', 10);

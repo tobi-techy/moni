@@ -1,8 +1,9 @@
-import { LETTA_API_KEY, LETTA_BASE_URL, DEMO_MODE } from './env.js';
+import { LETTA_API_KEY, LETTA_BASE_URL, LETTA_MODEL, DEMO_MODE } from './env.js';
 import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { B20_TOKENS } from './constants.js';
 
-// Letta Agent Types
+// ─── Letta API Types (matching the REST API response format) ───────────────
+
 export interface LettaAgent {
   id: string;
   name: string;
@@ -10,32 +11,33 @@ export interface LettaAgent {
   human: string;
   system: string;
   created_at: string;
-  tools?: any[];
-  tool_rules?: string[];
 }
 
-export interface LettaMessage {
-  role: 'user' | 'assistant' | 'system' | 'function' | 'tool';
-  content: string;
-  name?: string;
-  tool_call_id?: string;
+// Letta returns typed messages with a message_type discriminator
+interface LettaTypedMessage {
+  id: string;
+  message_type: string; // 'assistant_message' | 'tool_call_message' | 'tool_return_message' | 'reasoning_message' | ...
+  content?: string | Array<{ text?: string; type?: string }>;
+  tool_call?: {
+    name: string;
+    arguments: string; // JSON-encoded string
+    tool_call_id: string;
+  };
   tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
+    name: string;
+    arguments: string;
+    tool_call_id: string;
   }>;
 }
 
-export interface LettaResponse {
-  messages: LettaMessage[];
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
+interface LettaResponse {
+  messages: LettaTypedMessage[];
+  stop_reason?: { stop_reason: string; message_type?: string };
+  usage?: any;
 }
 
-// Enhanced System Prompt for Financial Expert & Auditor Persona
+// ─── System prompt & persona ───────────────────────────────────────────────
+
 const MONI_SYSTEM_PROMPT = `You are Moni, a CFA-level portfolio manager and auditor specializing in Coinbase Tokenized Stocks (B20 standard) on Base network. You operate via iMessage with a conversational, human tone.
 
 ## CORE IDENTITY
@@ -58,7 +60,7 @@ const MONI_SYSTEM_PROMPT = `You are Moni, a CFA-level portfolio manager and audi
 
 ## COMMUNICATION STYLE
 ✅ "Your AAPL position is up 12% this week — worth $22k now. Total portfolio $47k."
-❌ "📊 **Portfolio**\n\n**AAPL**\n  💎 100 shares\n  💰 $22,000"
+❌ "📊 **Portfolio**\\n\\n**AAPL**\\n  💎 100 shares\\n  💰 $22,000"
 
 ✅ "That'd put you at 85% in tech. Your risk limit is 70%. Want to trim NVDA first?"
 ❌ "❌ Error: Max position size exceeded. Use /rebalance command."
@@ -89,7 +91,48 @@ const MONI_PERSONA = `I'm Moni, your portfolio manager and auditor for tokenized
 
 const MONI_HUMAN_TEMPLATE = (userId: string) => `User ID: ${userId}. They trade Coinbase Tokenized Stocks (B20) on Base via iMessage. They want a conversational expert who reasons about their portfolio, flags risks, executes trades on confirmation, and proactively monitors their positions. They may be new to DeFi or experienced — adapt accordingly.`;
 
-// Letta API Client
+// ─── Client tools (passed per-message, executed on the Moni backend) ────────
+
+// TOOL_DEFINITIONS already has { name, description, parameters } which matches
+// the Letta client_tools format exactly.
+const CLIENT_TOOLS = TOOL_DEFINITIONS.map((t) => ({
+  name: t.name,
+  description: t.description,
+  parameters: t.parameters,
+}));
+
+// ─── Local trading memory (application state, not agent identity) ───────────
+// Trading memory is application state (watchlist, risk params, strategies).
+// It belongs in local storage, not in Letta's core memory blocks which are for
+// the agent's identity and behavioral context.
+
+const localTradingMemory = new Map<string, TradingMemory>();
+
+function defaultTradingMemory(): TradingMemory {
+  return {
+    watchlist: ['AAPL', 'NVDA', 'MSFT'],
+    riskParams: {
+      maxPositionSizeUSD: 10000,
+      maxDailyLossUSD: 1000,
+      autoTradeEnabled: false,
+    },
+    activeStrategies: [],
+    preferences: {
+      defaultSlippage: 1.0,
+      preferredTokens: ['AAPL', 'NVDA', 'MSFT'],
+      notificationLevel: 'trades',
+    },
+    transactionHistory: [],
+    conversationContext: {
+      lastTopic: '',
+      pendingDecision: '',
+      discussedTokens: [],
+    },
+  };
+}
+
+// ─── Letta API Client ───────────────────────────────────────────────────────
+
 class LettaClient {
   private baseUrl: string;
   private apiKey: string;
@@ -104,7 +147,6 @@ class LettaClient {
       return this.getMockResponse<T>(endpoint, options);
     }
 
-    // Check if API key is configured
     if (!this.apiKey) {
       console.warn('LETTA_API_KEY not configured, falling back to demo mode');
       return this.getMockResponse<T>(endpoint, options);
@@ -121,121 +163,78 @@ class LettaClient {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
-      console.error(`Letta API error: ${response.status} ${response.statusText}`, { endpoint, error: errorText });
-      
-      // Fall back to demo mode on 4xx/5xx errors
-      if (response.status >= 400) {
-        console.warn('Falling back to demo mode due to API error');
-        return this.getMockResponse<T>(endpoint, options);
-      }
-      
-      throw new Error(`Letta API error: ${response.status} ${response.statusText}`);
+      const error = new Error(`Letta API error: ${response.status} ${response.statusText}\nEndpoint: ${endpoint}\n${errorText}`);
+      console.error(error.message);
+      throw error;
     }
 
     return response.json() as Promise<T>;
   }
 
+  // ─── Mock responses (demo mode only) ─────────────────────────────────────
+
   private getMockResponse<T>(endpoint: string, options: RequestInit = {}): T {
-    if (endpoint.includes('/agents') && options.method === 'POST') {
+    // Agent creation: POST /v1/agents/
+    if (endpoint === '/v1/agents/' && options.method === 'POST') {
       return {
         id: 'demo-agent-id',
         name: 'Moni Trading Agent',
         persona: MONI_PERSONA,
         human: MONI_HUMAN_TEMPLATE('demo'),
         system: MONI_SYSTEM_PROMPT,
-        tools: TOOL_DEFINITIONS,
-        tool_rules: [
-          'Always use tools for portfolio, trading, and risk data — never hallucinate',
-          'Chain tools for multi-step reasoning (portfolio → analyze → suggest)',
-          'Confirm before execute_trade',
-          'Explain tool results in natural language'
-        ],
         created_at: new Date().toISOString(),
       } as T;
     }
-    if (endpoint.includes('/messages')) {
-      // In demo mode, we'll handle tool calling manually in the conversation handler
+    // List agents: GET /v1/agents/
+    if (endpoint === '/v1/agents/' && !options.method) {
+      return [] as T;
+    }
+    // Messages: POST /v1/agents/{id}/messages
+    if (endpoint.includes('/messages') && options.method === 'POST') {
       return {
         messages: [
-          { role: 'assistant', content: 'I\'ll help you with that. Let me check your portfolio first.' }
-        ]
-      } as T;
-    }
-    if (endpoint.includes('/memory')) {
-      return {
-        trading: {
-          watchlist: ['AAPL', 'NVDA', 'MSFT'],
-          riskParams: { maxPositionSizeUSD: 10000, maxDailyLossUSD: 1000, autoTradeEnabled: false },
-          activeStrategies: [],
-          preferences: { defaultSlippage: 1.0, preferredTokens: ['AAPL', 'NVDA', 'MSFT'], notificationLevel: 'trades' },
-          transactionHistory: [],
-        }
+          {
+            id: 'demo-msg-1',
+            message_type: 'assistant_message',
+            content: "I'll help you with that. Let me check your portfolio first.",
+          },
+        ],
+        stop_reason: { stop_reason: 'end_turn', message_type: 'stop_reason' },
       } as T;
     }
     return {} as T;
   }
 
+  // ─── Agent management ─────────────────────────────────────────────────────
+
   // Create or get agent for a user
   async getOrCreateAgent(userId: string): Promise<LettaAgent> {
-    // Sanitize userId for agent name (Letta may not accept special chars)
     const sanitizedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    
+    const agentName = `Moni Trading Agent - ${sanitizedUserId}`;
+
+    // Try to find an existing agent for this user first
+    try {
+      const agents = await this.request<LettaAgent[]>('/v1/agents/?limit=100');
+      const existing = agents?.find((a) => a.name === agentName);
+      if (existing) {
+        return existing;
+      }
+    } catch {
+      // If listing fails, proceed to create
+    }
+
+    // Create new agent — tools are passed as client_tools per message, not here
     const agentConfig = {
-      name: `Moni Trading Agent - ${sanitizedUserId}`,
+      name: agentName,
+      model: LETTA_MODEL,
       persona: MONI_PERSONA,
       human: MONI_HUMAN_TEMPLATE(userId),
       system: MONI_SYSTEM_PROMPT,
-      tools: TOOL_DEFINITIONS,
-      tool_rules: [
-        'Always use tools for portfolio, trading, and risk data — never hallucinate',
-        'Chain tools for multi-step reasoning (portfolio → analyze → suggest)',
-        'Confirm before execute_trade',
-        'Explain tool results in natural language',
-        'Flag risks: concentration, correlation, leverage, fees, tax',
-        'Ask clarifying questions when intent is ambiguous'
-      ],
     };
 
     return this.request<LettaAgent>('/v1/agents/', {
       method: 'POST',
       body: JSON.stringify(agentConfig),
-    });
-  }
-
-  // Send message to agent with tool support
-  async sendMessage(agentId: string, message: string, tools?: any[]): Promise<LettaResponse> {
-    return this.request<LettaResponse>(`/v1/agents/${agentId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: message }],
-        tools: tools || TOOL_DEFINITIONS,
-        tool_choice: 'auto',
-      }),
-    });
-  }
-
-  // Send message with tool results (for multi-turn tool calling)
-  async sendMessageWithTools(agentId: string, messages: LettaMessage[]): Promise<LettaResponse> {
-    return this.request<LettaResponse>(`/v1/agents/${agentId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({
-        messages,
-        tools: TOOL_DEFINITIONS,
-        tool_choice: 'auto',
-      }),
-    });
-  }
-
-  // Get agent memory
-  async getMemory(agentId: string): Promise<any> {
-    return this.request(`/v1/agents/${agentId}/memory`);
-  }
-
-  // Update agent memory (core memory blocks)
-  async updateMemory(agentId: string, memory: any): Promise<any> {
-    return this.request(`/v1/agents/${agentId}/memory`, {
-      method: 'PATCH',
-      body: JSON.stringify(memory),
     });
   }
 
@@ -246,11 +245,87 @@ class LettaClient {
 
   // Delete agent
   async deleteAgent(agentId: string): Promise<void> {
-    return this.request(`/v1/agents/${agentId}`, { method: 'DELETE' });
+    await this.request(`/v1/agents/${agentId}`, { method: 'DELETE' });
+  }
+
+  // ─── Messaging with client-side tool calling ──────────────────────────────
+
+  // Send a user message to the agent
+  async sendMessage(agentId: string, message: string): Promise<LettaResponse> {
+    return this.request<LettaResponse>(`/v1/agents/${agentId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        input: message,
+        client_tools: CLIENT_TOOLS,
+      }),
+    });
+  }
+
+  // Send tool execution results back to the agent
+  async sendToolReturns(
+    agentId: string,
+    toolReturns: Array<{ tool_call_id: string; status: 'success' | 'error'; tool_return: string }>,
+  ): Promise<LettaResponse> {
+    return this.request<LettaResponse>(`/v1/agents/${agentId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        messages: [
+          {
+            type: 'tool_return',
+            tool_returns: toolReturns,
+          },
+        ],
+        client_tools: CLIENT_TOOLS,
+      }),
+    });
   }
 }
 
-// Singleton instance
+// ─── Response parsing helpers ───────────────────────────────────────────────
+
+// Extract the assistant's text from a Letta response
+function extractAssistantText(response: LettaResponse): string | null {
+  for (const msg of response.messages) {
+    if (msg.message_type === 'assistant_message') {
+      if (typeof msg.content === 'string') {
+        return msg.content;
+      }
+      if (Array.isArray(msg.content)) {
+        // Extract text from content parts
+        const texts = msg.content
+          .map((part) => part.text || '')
+          .filter(Boolean);
+        return texts.join('') || null;
+      }
+    }
+  }
+  return null;
+}
+
+// Extract tool calls from a Letta response
+function extractToolCalls(response: LettaResponse): Array<{
+  name: string;
+  arguments: string;
+  tool_call_id: string;
+}> {
+  const calls: Array<{ name: string; arguments: string; tool_call_id: string }> = [];
+  for (const msg of response.messages) {
+    if (msg.message_type === 'tool_call_message') {
+      if (msg.tool_call) {
+        calls.push(msg.tool_call);
+      }
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          calls.push(tc);
+        }
+      }
+    }
+  }
+  return calls;
+}
+
+// ─── Singleton client ──────────────────────────────────────────────────────
+
 let lettaClient: LettaClient | null = null;
 
 export function getLettaClient(): LettaClient {
@@ -260,81 +335,90 @@ export function getLettaClient(): LettaClient {
   return lettaClient;
 }
 
-// User-specific agent management
+// ─── User → agent mapping ───────────────────────────────────────────────────
+
 const userAgents = new Map<string, string>(); // userId -> agentId
 
 export async function getUserAgent(userId: string): Promise<string> {
   let agentId = userAgents.get(userId);
-  
+
   if (!agentId) {
     const client = getLettaClient();
     const agent = await client.getOrCreateAgent(userId);
     agentId = agent.id;
     userAgents.set(userId, agentId);
   }
-  
+
   return agentId;
 }
 
-// Enhanced message sending with multi-turn tool calling support
+// ─── Main entry: send a message and handle multi-turn tool calling ───────────
+
 export async function sendAgentMessage(userId: string, message: string): Promise<string> {
-  const agentId = await getUserAgent(userId);
-  const client = getLettaClient();
-  
-  // In demo mode, handle tool calling manually since mock doesn't support it
+  // In demo mode, handle tool calling manually via keyword routing
   if (DEMO_MODE === 'true') {
     return handleDemoMessage(userId, message);
   }
-  
-  // Start conversation
-  let messages: LettaMessage[] = [{ role: 'user', content: message }];
-  let maxTurns = 5; // Prevent infinite loops
-  
+
+  const agentId = await getUserAgent(userId);
+  const client = getLettaClient();
+
+  // Send the user message
+  let response = await client.sendMessage(agentId, message);
+
+  // Multi-turn tool calling loop
+  let maxTurns = 5;
   while (maxTurns-- > 0) {
-    const response = await client.sendMessageWithTools(agentId, messages);
-    
-    // Add assistant message to history
-    const assistantMsg = response.messages.find(m => m.role === 'assistant');
-    if (assistantMsg) {
-      messages.push(assistantMsg);
-    }
-    
     // Check for tool calls
-    const toolCalls = assistantMsg?.tool_calls;
-    if (!toolCalls || toolCalls.length === 0) {
-      // No tool calls, return the response
-      return assistantMsg?.content || 'I\'m processing your request...';
+    const toolCalls = extractToolCalls(response);
+
+    if (toolCalls.length === 0) {
+      // No tool calls — return the assistant's text response
+      const text = extractAssistantText(response);
+      return text || "I'm processing your request...";
     }
-    
-    // Execute tool calls
-    for (const toolCall of toolCalls) {
-      const { name, arguments: argsStr } = toolCall.function;
-      const args = JSON.parse(argsStr);
-      args.userId = userId; // Inject userId
-      
-      const { executeTool } = await import('./agent-tools.js');
-      const result = await executeTool(name as ToolName, args);
-      
-      // Add tool result to messages
-      messages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: JSON.stringify(result),
-      });
+
+    // Execute each tool call locally
+    const toolReturns: Array<{ tool_call_id: string; status: 'success' | 'error'; tool_return: string }> = [];
+
+    for (const call of toolCalls) {
+      try {
+        const args = JSON.parse(call.arguments);
+        args.userId = userId; // Inject userId for tools that need it
+
+        const { executeTool } = await import('./agent-tools.js');
+        const result = await executeTool(call.name as ToolName, args);
+
+        toolReturns.push({
+          tool_call_id: call.tool_call_id,
+          status: result.success ? 'success' : 'error',
+          tool_return: JSON.stringify(result),
+        });
+      } catch (err) {
+        toolReturns.push({
+          tool_call_id: call.tool_call_id,
+          status: 'error',
+          tool_return: JSON.stringify({ error: String(err) }),
+        });
+      }
     }
-    // Loop continues to let agent process tool results
+
+    // Send tool results back to the agent
+    response = await client.sendToolReturns(agentId, toolReturns);
   }
-  
-  return 'I\'m taking too long to think. Let me try a simpler approach.';
+
+  // Max turns reached — return whatever the agent last said
+  const text = extractAssistantText(response);
+  return text || "I'm taking too long to think. Let me try a simpler approach.";
 }
 
-// Demo mode handler - manually routes to appropriate tools
+// ─── Demo mode: keyword-based tool routing (no Letta API needed) ─────────────
+
 async function handleDemoMessage(userId: string, message: string): Promise<string> {
   const { executeTool } = await import('./agent-tools.js');
-  // ToolName is a type-only export, use it directly in the cast
   const lower = message.toLowerCase();
-  
-  // Risk analysis - check before portfolio to catch "how risky is my portfolio"
+
+  // Risk analysis
   if (lower.includes('risk') || lower.includes('analyze') || lower.includes('how risky')) {
     const result = await executeTool('analyze_portfolio_risk' as ToolName, { userId });
     if (result.success && result.data) {
@@ -343,8 +427,8 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not analyze risk';
   }
-  
-  // Rebalance - check before portfolio (since "rebalance" contains "balance")
+
+  // Rebalance
   if (lower.includes('rebalance')) {
     const result = await executeTool('check_rebalance_needed' as ToolName, { userId });
     if (result.success && result.data) {
@@ -353,10 +437,9 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not check rebalance';
   }
-  
-  // Stop-loss - check before portfolio (since "stop-loss" contains "loss" which isn't checked but good to be early)
+
+  // Stop-loss
   if (lower.includes('stop.loss') || lower.includes('stop loss') || lower.includes('stoploss') || lower.includes('stop-loss')) {
-    // Check if creating or listing
     if (lower.includes('create') || lower.includes('set')) {
       return "To create a stop-loss, I need: token, stop price, target price, and amount. Example: 'Set stop-loss for AAPL at $180 with target $250 for 10 shares'";
     }
@@ -367,7 +450,7 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not fetch stop-losses';
   }
-  
+
   // Portfolio queries
   if (lower.includes('portfolio') || lower.includes('holdings') || (lower.includes('balance') && !lower.includes('rebalance')) || lower.includes('worth')) {
     const result = await executeTool('get_portfolio' as ToolName, { userId });
@@ -377,8 +460,8 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not fetch portfolio';
   }
-  
-  // Watchlist - check before price to avoid "what's my watchlist" matching price regex
+
+  // Watchlist
   if (lower.includes('watchlist')) {
     const result = await executeTool('get_watchlist_prices' as ToolName, { userId });
     if (result.success && result.data) {
@@ -387,9 +470,9 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not fetch watchlist';
   }
-  
-  // Price queries - more specific regex to avoid false matches
-  const priceMatch = message.match(/(?:price|quote)\s+(?:of\s+)?([A-Z]{2,5})/i) || 
+
+  // Price queries
+  const priceMatch = message.match(/(?:price|quote)\s+(?:of\s+)?([A-Z]{2,5})/i) ||
     message.match(/(?:how much|what['']s)\s+(?:is\s+)?\$?([A-Z]{2,5})/i);
   if (priceMatch) {
     const result = await executeTool('get_price' as ToolName, { symbol: priceMatch[1] });
@@ -399,10 +482,9 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not fetch price';
   }
-  
+
   // Buy/sell/trade
   if (lower.includes('buy') || lower.includes('sell') || lower.includes('trade')) {
-    // Extract tokens and amount - simplified for demo
     const tokens = extractTokens(message);
     if (tokens.length >= 2) {
       const fromToken = tokens.find(t => t === 'USDC') || tokens[0];
@@ -411,9 +493,8 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
       const amount = amountMatch ? amountMatch[1] : '100';
 
       if (lower.includes('sell')) {
-        // Selling: fromToken is the stock, toToken is USDC
-        const quoteResult = await executeTool('get_swap_quote' as ToolName, { 
-          userId, fromToken: toToken, toToken: fromToken, amount 
+        const quoteResult = await executeTool('get_swap_quote' as ToolName, {
+          userId, fromToken: toToken, toToken: fromToken, amount
         });
         if (quoteResult.success) {
           const { formatQuoteHuman } = await import('./conversation.js');
@@ -421,9 +502,8 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
         }
         return quoteResult.error || 'Could not get quote';
       } else {
-        // Buying: fromToken is USDC, toToken is the stock
-        const quoteResult = await executeTool('get_swap_quote' as ToolName, { 
-          userId, fromToken, toToken, amount 
+        const quoteResult = await executeTool('get_swap_quote' as ToolName, {
+          userId, fromToken, toToken, amount
         });
         if (quoteResult.success) {
           const { formatQuoteHuman } = await import('./conversation.js');
@@ -434,13 +514,12 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return "I need to know what you want to trade. Try: 'Buy $100 of AAPL with USDC' or 'Sell 10 NVDA for USDC'";
   }
-  
+
   // Confirm trade
   if (lower.includes('confirm') || lower === 'yes' || lower === 'yep') {
-    // In demo, we'd need to track the pending quote - simplified
     return "In demo mode, trades are simulated. What would you like to trade?";
   }
-  
+
   // Alerts
   if (lower.includes('alert')) {
     const result = await executeTool('check_price_alerts' as ToolName, { userId });
@@ -450,7 +529,7 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     }
     return result.error || 'Could not check alerts';
   }
-  
+
   // Help
   if (lower.includes('help') || lower.includes('what can you do')) {
     return `I'm Moni, your portfolio manager for tokenized stocks on Base. You can ask me:\n\n` +
@@ -464,8 +543,8 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
       `• "What's my watchlist doing?" - Watchlist prices\n\n` +
       `Just talk to me naturally — no commands needed.`;
   }
-  
-  // Default: general response
+
+  // Default
   return "I'm here to help with your tokenized stock portfolio on Base. What would you like to know? Try asking about your portfolio, prices, trades, risk, or automation.";
 }
 
@@ -474,28 +553,22 @@ function extractTokens(text: string): string[] {
   const tokens = Object.keys(B20_TOKENS);
   const found: string[] = [];
   const upper = text.toUpperCase();
-  
+
   for (const token of tokens) {
     if (upper.includes(token) || upper.includes(token.toLowerCase())) {
       found.push(token);
     }
   }
-  
-  // Also check for USDC
+
   if (upper.includes('USDC') || upper.includes('usdc')) {
     found.push('USDC');
   }
-  
+
   return [...new Set(found)];
 }
 
-export async function updateUserMemory(userId: string, memory: any): Promise<void> {
-  const agentId = await getUserAgent(userId);
-  const client = getLettaClient();
-  await client.updateMemory(agentId, memory);
-}
+// ─── Trading memory (local storage) ─────────────────────────────────────────
 
-// Trading-specific memory helpers
 export interface TradingMemory {
   watchlist: string[];
   riskParams: {
@@ -519,37 +592,25 @@ export interface TradingMemory {
     pendingDecision: string;
     discussedTokens: string[];
   };
+  pendingQuote?: any;
 }
 
 export async function getTradingMemory(userId: string): Promise<TradingMemory> {
-  const agentId = await getUserAgent(userId);
-  const client = getLettaClient();
-  const memory = await client.getMemory(agentId);
-  
-  return memory?.trading || {
-    watchlist: ['AAPL', 'NVDA', 'MSFT'],
-    riskParams: {
-      maxPositionSizeUSD: 10000,
-      maxDailyLossUSD: 1000,
-      autoTradeEnabled: false,
-    },
-    activeStrategies: [],
-    preferences: {
-      defaultSlippage: 1.0,
-      preferredTokens: ['AAPL', 'NVDA', 'MSFT'],
-      notificationLevel: 'trades',
-    },
-    transactionHistory: [],
-    conversationContext: {
-      lastTopic: '',
-      pendingDecision: '',
-      discussedTokens: [],
-    },
-  };
+  let memory = localTradingMemory.get(userId);
+  if (!memory) {
+    memory = defaultTradingMemory();
+    localTradingMemory.set(userId, memory);
+  }
+  return memory;
 }
 
-export async function setTradingMemory(userId: string, memory: Partial<TradingMemory>): Promise<void> {
+export async function setTradingMemory(userId: string, updates: Partial<TradingMemory>): Promise<void> {
   const current = await getTradingMemory(userId);
-  const updated = { ...current, ...memory };
-  await updateUserMemory(userId, { trading: updated });
+  const updated = { ...current, ...updates };
+  localTradingMemory.set(userId, updated);
+}
+
+export async function updateUserMemory(userId: string, _memory: any): Promise<void> {
+  // No-op: trading memory is now handled locally via getTradingMemory/setTradingMemory.
+  // Kept for backward compatibility with any callers that still reference it.
 }
