@@ -20,13 +20,14 @@ const lastNotifications = new Map<string, {
 
 // Main proactive monitoring loop
 export async function startProactiveMonitoring(
-  sendMessage: (userId: string, message: string) => Promise<void>
+  sendMessage: (userId: string, message: string) => Promise<void>,
+  getActiveUserIds?: () => string[]
 ): Promise<void> {
   console.log('🔄 Starting proactive monitoring loop...');
   
   setInterval(async () => {
     try {
-      await runProactiveChecks(sendMessage);
+      await runProactiveChecks(sendMessage, getActiveUserIds);
     } catch (error) {
       console.error('Proactive monitoring error:', error);
     }
@@ -35,27 +36,18 @@ export async function startProactiveMonitoring(
 
 // Run all proactive checks for all users
 async function runProactiveChecks(
-  sendMessage: (userId: string, message: string) => Promise<void>
+  sendMessage: (userId: string, message: string) => Promise<void>,
+  getActiveUserIds?: () => string[]
 ): Promise<void> {
-  // In production, get all active user IDs from database
-  // For now, we'll check users who have active strategies
-  // This would be replaced with a proper user registry
-  
-  const userIds = getActiveUserIds();
+  const userIds = getActiveUserIds ? getActiveUserIds() : getDefaultUserIds();
   
   for (const userId of userIds) {
     await checkUserProactive(userId, sendMessage);
   }
 }
 
-// Get user IDs that have active monitoring needs
-function getActiveUserIds(): string[] {
-  // In production, query database for users with:
-  // - Active stop-losses
-  // - Active price alerts
-  // - Active rebalance strategies
-  // - Auto-trade enabled
-  // For demo, return known demo user
+// Default: return demo user (fallback when no callback provided)
+function getDefaultUserIds(): string[] {
   return ['demo-user'];
 }
 

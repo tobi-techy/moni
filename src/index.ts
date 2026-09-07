@@ -32,29 +32,53 @@ const userSessions = new Map<string, {
   walletAddress: Address | null; 
   authenticated: boolean;
   lastActive: number;
+  space: any; // Store Spectrum space for proactive messaging
 }>();
 
 // Session cleanup interval (5 minutes)
 const SESSION_TTL = 5 * 60 * 1000;
 const CLEANUP_INTERVAL = 5 * 60 * 1000;
 
-function getSession(userId: string) {
+function getSession(userId: string, space?: any) {
   let session = userSessions.get(userId);
   if (!session) {
-    session = { walletAddress: null, authenticated: false, lastActive: Date.now() };
+    session = { walletAddress: null, authenticated: false, lastActive: Date.now(), space: null };
     userSessions.set(userId, session);
   }
   session.lastActive = Date.now();
+  if (space) {
+    session.space = space;
+  }
   return session;
 }
 
-// Periodic cleanup of stale sessions
+// Send a proactive message to a user via their stored Spectrum space
+async function sendProactiveMessage(userId: string, message: string): Promise<void> {
+  const session = userSessions.get(userId);
+  if (!session?.space) {
+    log.warn('Cannot send proactive message — no space for user', { userId });
+    return;
+  }
+  try {
+    await session.space.send(message);
+  } catch (error) {
+    log.error('Failed to send proactive message', { userId, error: (error as Error).message });
+  }
+}
+
+// Periodic cleanup of stale sessions (keep sessions with spaces for proactive messaging)
 function startSessionCleanup(): NodeJS.Timeout {
   return setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
     for (const [userId, session] of userSessions.entries()) {
-      if (now - session.lastActive > SESSION_TTL) {
+      // Don't clean up sessions that have a space (needed for proactive messages)
+      if (session.space && now - session.lastActive > SESSION_TTL * 6) {
+        // Keep space sessions 6x longer (30 min) so proactive monitoring can reach them
+        session.space = null;
+        userSessions.delete(userId);
+        cleaned++;
+      } else if (!session.space && now - session.lastActive > SESSION_TTL) {
         userSessions.delete(userId);
         cleaned++;
       }
@@ -124,6 +148,9 @@ async function handleMessage(space: any, userId: string, text: string) {
     await sendWithTyping(space, '⚠️ Too many messages. Please slow down.');
     return;
   }
+
+  // Store space for proactive messaging
+  getSession(userId, space);
 
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
@@ -229,9 +256,13 @@ if (hasSpectrumCredentials) {
   cleanupInterval = startSessionCleanup();
 
   // Start proactive monitoring in background
-  if (DEMO_MODE === 'true') {
-    log.info('Proactive monitoring enabled (demo mode)');
-  }
+  startProactiveMonitoring(
+    sendProactiveMessage,
+    () => Array.from(userSessions.keys()).filter(id => userSessions.get(id)?.space)
+  ).catch(err => {
+    log.error('Proactive monitoring failed to start', { error: err.message });
+  });
+  log.info('Proactive monitoring started', { interval: '60s' });
 
   // Start webhook server if webhook secret is configured
   if (SPECTRUM_WEBHOOK_SECRET) {
@@ -321,6 +352,24 @@ if (hasSpectrumCredentials) {
   let space: any = {
     send: async (text: string) => console.log(`\n${text}\n`),
   };
+
+  // Register demo user session with space for proactive monitoring
+  getSession(demoUserId, space);
+
+  // Start proactive monitoring in CLI mode too
+  startProactiveMonitoring(
+    async (userId: string, message: string) => {
+      const session = userSessions.get(userId);
+      if (session?.space) {
+        await session.space.send(message);
+      } else {
+        console.log(`\n📱 [Proactive → ${userId}]: ${message}\n`);
+      }
+    },
+    () => [demoUserId]
+  ).catch(err => {
+    log.error('Proactive monitoring failed to start', { error: err.message });
+  });
 
   rl.prompt();
 
