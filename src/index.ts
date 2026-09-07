@@ -1,6 +1,8 @@
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
-import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE } from './env.js';
+import { typing } from 'spectrum-ts';
+import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { handleConversation, ensureWalletConnected } from './conversation.js';
 import { startProactiveMonitoring } from './proactive.js';
@@ -101,11 +103,25 @@ function checkRateLimit(userId: string): boolean {
   return true;
 }
 
+// Helper to send a message with typing indicator
+async function sendWithTyping(space: any, content: string | any) {
+  // Start typing indicator
+  await space.send(typing('start'));
+  
+  try {
+    // Send the actual content
+    await space.send(content);
+  } finally {
+    // Stop typing indicator
+    await space.send(typing('stop'));
+  }
+}
+
 // Main message handler - conversational
 async function handleMessage(space: any, userId: string, text: string) {
   // Rate limiting
   if (!checkRateLimit(userId)) {
-    await space.send('⚠️ Too many messages. Please slow down.');
+    await sendWithTyping(space, '⚠️ Too many messages. Please slow down.');
     return;
   }
 
@@ -116,22 +132,22 @@ async function handleMessage(space: any, userId: string, text: string) {
   if (lower === '/connect' || lower === '/wallet' || lower === '/login') {
     const walletAddress = await initializeWallet(userId);
     if (walletAddress) {
-      await space.send(`✅ Wallet connected: ${walletAddress.slice(0,6)}...${walletAddress.slice(-4)}`);
+      await sendWithTyping(space, `✅ Wallet connected: ${walletAddress.slice(0,6)}...${walletAddress.slice(-4)}`);
     } else if (DEMO_MODE === 'true') {
       const demoAddress = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
       const session = getSession(userId);
       session.walletAddress = demoAddress;
       session.authenticated = true;
-      await space.send(`✅ Demo wallet connected: ${demoAddress.slice(0,6)}...${demoAddress.slice(-4)}\nAll trades are simulated.`);
+      await sendWithTyping(space, `✅ Demo wallet connected: ${demoAddress.slice(0,6)}...${demoAddress.slice(-4)}\nAll trades are simulated.`);
     } else {
-      await space.send(`🔐 Connect your wallet via Privy:\nhttps://auth.privy.io/connect?app_id=${process.env.PRIVY_APP_ID}`);
+      await sendWithTyping(space, `🔐 Connect your wallet via Privy:\nhttps://auth.privy.io/connect?app_id=${process.env.PRIVY_APP_ID}`);
     }
     return;
   }
 
   // Help command
   if (lower === '/help' || lower === '/commands') {
-    await space.send(
+    await sendWithTyping(space,
       `Moni — your portfolio manager for tokenized stocks on Base.\n\n` +
       `Just talk to me naturally:\n` +
       `• "What's my portfolio worth?"\n` +
@@ -151,7 +167,7 @@ async function handleMessage(space: any, userId: string, text: string) {
     await handleConversation(space, userId, text);
   } catch (error) {
     log.error('Error handling message', { userId, error: (error as Error).message });
-    await space.send('❌ Something went wrong. Please try again.');
+    await sendWithTyping(space, '❌ Something went wrong. Please try again.');
   }
 }
 
@@ -204,6 +220,7 @@ if (hasSpectrumCredentials) {
     projectId: PROJECT_ID,
     projectSecret: PROJECT_SECRET,
     providers,
+    webhookSecret: SPECTRUM_WEBHOOK_SECRET || undefined,
   });
 
   log.info('Moni iMessage Trading Agent started', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
@@ -216,16 +233,71 @@ if (hasSpectrumCredentials) {
     log.info('Proactive monitoring enabled (demo mode)');
   }
 
-  // Handle incoming messages
-  for await (const [space] of app.messages) {
+  // Start webhook server if webhook secret is configured
+  if (SPECTRUM_WEBHOOK_SECRET) {
+    const webhookServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url?.endsWith('/spectrum/webhook')) {
+        // Collect raw body for HMAC verification
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks);
+        
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value) headers[key] = Array.isArray(value) ? value[0] : value;
+        }
+        
+        try {
+          const result = await app.webhook(
+            { body, headers },
+            async (space: any, message: any) => {
+              // Handle message (fire-and-forget)
+              if (message.content?.type === 'text' && message.content.text) {
+                const userId = space.user?.id || space.id || 'unknown';
+                await handleMessage(space, userId, message.content.text);
+              }
+            }
+          );
+          
+          res.writeHead(result.status, result.headers);
+          res.end(Buffer.from(result.body));
+        } catch (error) {
+          console.error('Webhook error:', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+        return;
+      }
+      
+      // Health check endpoint
+      if (req.method === 'GET' && req.url?.endsWith('/health')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+        return;
+      }
+      
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    });
+    
+    webhookServer.listen(WEBHOOK_PORT, () => {
+      log.info(`Webhook server listening`, { port: WEBHOOK_PORT, path: '/spectrum/webhook' });
+      log.info(`Health check`, { path: '/health' });
+    });
+  }
+
+  // Handle incoming messages via streaming (FIXED: proper destructuring)
+  for await (const [space, message] of app.messages) {
+    // Skip outbound messages (our own responses)
+    if (message.direction === 'outbound') continue;
+    
     // @ts-ignore - Spectrum space types
     const userId = space.user?.id || space.id || 'unknown';
     
-    // @ts-ignore - Spectrum space types
-    for await (const message of space.messages) {
-      if (message.text) {
-        await handleMessage(space, userId, message.text);
-      }
+    if (message.content?.type === 'text' && message.content.text) {
+      await handleMessage(space, userId, message.content.text);
     }
   }
 } else if (isInteractive) {
