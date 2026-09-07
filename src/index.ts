@@ -46,19 +46,36 @@ function getSession(userId: string) {
   return session;
 }
 
-// Periodic cleanup of stale sessions
+// Periodic cleanup of stale sessions and expired rate limits
 function startSessionCleanup(): NodeJS.Timeout {
   return setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
+    
+    // Clean stale sessions
     for (const [userId, session] of userSessions.entries()) {
       if (now - session.lastActive > SESSION_TTL) {
         userSessions.delete(userId);
         cleaned++;
       }
     }
-    if (cleaned > 0) {
-      log.info('Cleaned up stale sessions', { count: cleaned, remaining: userSessions.size });
+    
+    // Clean expired rate limits
+    let rateLimitsCleaned = 0;
+    for (const [userId, limit] of rateLimits.entries()) {
+      if (now > limit.resetAt) {
+        rateLimits.delete(userId);
+        rateLimitsCleaned++;
+      }
+    }
+    
+    if (cleaned > 0 || rateLimitsCleaned > 0) {
+      log.info('Cleaned up stale sessions and rate limits', { 
+        sessionsCleaned: cleaned, 
+        rateLimitsCleaned,
+        remainingSessions: userSessions.size,
+        remainingRateLimits: rateLimits.size
+      });
     }
   }, CLEANUP_INTERVAL);
 }

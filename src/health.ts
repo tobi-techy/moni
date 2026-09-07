@@ -1,7 +1,10 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { DEMO_MODE } from './env.js';
+import { createPublicClient, http } from 'viem';
+import { base, baseSepolia } from 'viem/chains';
+import { DEMO_MODE, BASE_RPC_URL } from './env.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const RPC_TIMEOUT_MS = 3000;
 
 interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -17,10 +20,19 @@ interface HealthStatus {
 
 let startTime = Date.now();
 
+function getPublicClient() {
+  const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
+  return createPublicClient({
+    chain,
+    transport: http(BASE_RPC_URL, { timeout: RPC_TIMEOUT_MS }),
+  });
+}
+
 async function checkRpcHealth(): Promise<boolean> {
   try {
-    // Simple check - just verify we can create a client
-    // In production, you'd do a light RPC call like eth_blockNumber
+    const client = getPublicClient();
+    // Lightweight RPC call to verify connectivity
+    await client.getBlockNumber();
     return true;
   } catch {
     return false;

@@ -62,9 +62,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
+      - name: Install AtlasFlow CLI
+        run: |
+          curl -fsSL https://atlasflow.com/install.sh | sh
+          echo "/usr/local/bin" >> $GITHUB_PATH
+
       - name: Deploy to AtlasFlow
-        uses: atlasflowlabs/atlasflow-deploy@v1
-        with:
-          api-key: ${{ secrets.ATLASFLOW_API_KEY }}
-          project: moni
-          environment: production
+        env:
+          ATLASFLOW_API_KEY: ${{ secrets.ATLASFLOW_API_KEY }}
+        run: |
+          atlasflow login --key "$ATLASFLOW_API_KEY"
+          atlasflow deployments create --project moni --environment production --wait
