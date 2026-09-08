@@ -51,7 +51,13 @@ class LettaClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Letta API error: ${response.status} ${response.statusText}`);
+      const body = await response.text().catch(() => '');
+      const error = new Error(`Letta API error: ${response.status} ${response.statusText}\n${body}`);
+      // @ts-ignore
+      error.status = response.status;
+      // @ts-ignore
+      error.body = body;
+      throw error;
     }
 
     return response.json() as Promise<T>;

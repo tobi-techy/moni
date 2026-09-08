@@ -622,7 +622,14 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
     const response = await sendAgentMessage(userId, message);
     await space.send(response);
   } catch (error) {
+    const lettaConflict = error instanceof Error && /409 Conflict/.test(error.message);
+    const waitingForApproval = error instanceof Error && /waiting for approval/.test(error.message);
+
     console.error('Agent error:', error);
+    if (lettaConflict || waitingForApproval) {
+      await space.send('⏳ My agent loop is waiting on a pending tool approval. I’ll continue as soon as that clears.');
+      return;
+    }
     await space.send('❌ Sorry, I had trouble processing that. Try a command or ask again.');
   }
 }
@@ -632,6 +639,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   const session = getSession(userId);
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
+  console.log('📩 Message received:', JSON.stringify({ userId, text: trimmed }));
 
   // Handle commands
   if (lower.startsWith('/portfolio') || lower.startsWith('/holdings') || lower.startsWith('/balance')) {
@@ -751,7 +759,7 @@ if (hasSpectrumCredentials) {
   // Handle incoming messages
   for await (const [space] of app.messages) {
     // @ts-ignore - Spectrum space types
-    const userId = space.user?.id || space.id || 'unknown';
+    const userId = space.user?.id || space.id || `space-${Date.now()}`;
     
     // @ts-ignore - Spectrum space types
     for await (const message of space.messages) {
