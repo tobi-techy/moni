@@ -5,7 +5,7 @@ import { analyzePortfolio, PortfolioAnalytics } from './analytics.js';
 import { checkStopLosses, getActiveStopLosses, StopLossConfig } from './automation.js';
 import { checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
-import { addTransaction, Transaction } from './history.js';
+import { addTransaction, Transaction, getTransactionHistory } from './history.js';
 import { DEMO_MODE } from './env.js';
 import { type Address, createPublicClient, http } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
@@ -547,6 +547,119 @@ export async function remove_from_watchlist(userId: string, symbol: string): Pro
   }
 }
 
+// Portfolio Digest — comprehensive summary for on-demand or proactive delivery
+export async function get_portfolio_digest(userId: string): Promise<ToolResult> {
+  try {
+    const walletAddress = await getUserWalletAddress(userId);
+    if (!walletAddress) {
+      return { success: false, error: 'Wallet not connected.' };
+    }
+
+    // Gather all data in parallel
+    const [portfolio, analytics, memory, history] = await Promise.all([
+      getPortfolio(walletAddress),
+      analyzePortfolio(userId),
+      getTradingMemory(userId),
+      getTransactionHistory(userId, 5),
+    ]);
+
+    if (portfolio.length === 0) {
+      return {
+        success: true,
+        data: {
+          digest: 'Your portfolio is empty. Start trading tokenized stocks on Base!',
+          totalValue: '$0',
+          positions: 0,
+        }
+      };
+    }
+
+    // Build digest sections
+    const sections: string[] = [];
+
+    // 1. Portfolio overview
+    const totalValue = formatUSD(analytics.totalValueUSD);
+    const pnlSign = analytics.dailyPnL >= 0n ? '+' : '-';
+    const pnlAbs = analytics.dailyPnL >= 0n ? analytics.dailyPnL : -analytics.dailyPnL;
+    const pnlEmoji = analytics.dailyPnL >= 0n ? '📈' : '📉';
+    sections.push(
+      `💰 Portfolio: ${totalValue} | ${pnlEmoji} 24h P&L: ${pnlSign}${formatUSD(pnlAbs)} | 📦 ${analytics.totalPositions} positions`
+    );
+
+    // 2. Allocation
+    if (analytics.allocation.length > 0) {
+      const allocLines = analytics.allocation.map(a => {
+        const bar = '█'.repeat(Math.max(1, Math.round(a.percentage / 5)));
+        return `  ${a.symbol.padEnd(6)} ${bar} ${a.percentage.toFixed(1)}%`;
+      });
+      sections.push('📊 Allocation:\n' + allocLines.join('\n'));
+    }
+
+    // 3. Risk
+    sections.push(
+      `⚠️ Risk: ${analytics.riskLevel.toUpperCase()} | Diversification: ${analytics.diversificationScore}/100`
+    );
+
+    // 4. Active strategies
+    const activeStrategies = memory.activeStrategies.filter((s: any) => s.active);
+    if (activeStrategies.length > 0) {
+      const strategyLines = activeStrategies.map((s: any) => {
+        if (s.type === 'dca') {
+          const p = s.params;
+          const lastExec = p.lastExecuted ? new Date(p.lastExecuted).toLocaleDateString() : 'never';
+          return `  🔄 DCA: ${p.amount} USDC → ${p.token} ${p.frequency} (last: ${lastExec})`;
+        }
+        if (s.type === 'stop_loss') {
+          const p = s.params;
+          return `  🛑 Stop-loss: ${p.token} stop $${p.stopLossPrice} / target $${p.takeProfitPrice}`;
+        }
+        if (s.type === 'price_alert') {
+          const p = s.params;
+          return `  🔔 Alert: ${p.token} ${p.direction} $${p.price}`;
+        }
+        if (s.type === 'rebalance') {
+          const p = s.params;
+          const targets = Object.entries(p.targetAllocation || {}).map(([k, v]) => `${k}:${v}%`).join(', ');
+          return `  ⚖️ Rebalance: ${targets} (±${p.tolerance || 5}%)`;
+        }
+        return `  ${s.type}: active`;
+      });
+      sections.push(`🤖 Active strategies (${activeStrategies.length}):\n${strategyLines.join('\n')}`);
+    }
+
+    // 5. Recent transactions
+    if (history.length > 0) {
+      const txLines = history.slice(0, 3).map((tx: any) => {
+        const date = new Date(tx.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const emoji = tx.type === 'buy' ? '🟢' : tx.type === 'sell' ? '🔴' : '🔵';
+        return `  ${emoji} ${date} ${tx.type.toUpperCase()} ${tx.fromAmountFormatted} ${tx.fromToken} → ${tx.toAmountFormatted} ${tx.toToken}`;
+      });
+      sections.push(`📜 Recent trades:\n${txLines.join('\n')}`);
+    }
+
+    // 6. Watchlist
+    if (memory.watchlist.length > 0) {
+      sections.push(`👁️ Watchlist: ${memory.watchlist.join(', ')}`);
+    }
+
+    const digest = sections.join('\n\n');
+
+    return {
+      success: true,
+      data: {
+        digest,
+        totalValue,
+        positions: analytics.totalPositions,
+        riskLevel: analytics.riskLevel,
+        activeStrategies: activeStrategies.length,
+        recentTransactions: history.length,
+      }
+    };
+  } catch (error) {
+    return { success: false, error: `Failed to generate digest: ${error}` };
+  }
+}
+
 // Tool definitions for Letta function calling
 export const TOOL_DEFINITIONS = [
   {
@@ -736,6 +849,17 @@ export const TOOL_DEFINITIONS = [
       },
       required: ['userId', 'symbol']
     }
+  },
+  {
+    name: 'get_portfolio_digest',
+    description: 'Get a comprehensive portfolio digest: total value, P&L, allocation, risk, active strategies, recent trades, and watchlist',
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'User ID' }
+      },
+      required: ['userId']
+    }
   }
 ] as const;
 
@@ -776,6 +900,8 @@ export async function executeTool(name: ToolName, args: Record<string, any>): Pr
       return add_to_watchlist(args.userId, args.symbol);
     case 'remove_from_watchlist':
       return remove_from_watchlist(args.userId, args.symbol);
+    case 'get_portfolio_digest':
+      return get_portfolio_digest(args.userId);
     default:
       return { success: false, error: `Unknown tool: ${name}` };
   }
