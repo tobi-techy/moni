@@ -18,6 +18,8 @@ export interface ToolResult<T = any> {
   error?: string;
 }
 
+const QUOTE_TTL_MS = 30_000;
+
 // Portfolio & Market Data Tools
 export async function get_portfolio(userId: string): Promise<ToolResult> {
   try {
@@ -151,10 +153,10 @@ export async function get_swap_quote(
     const toAmountFormatted = formatAmount(BigInt(quote.toAmount), toDecimals);
     const fromAmountFormatted = formatAmount(BigInt(quote.fromAmount), fromDecimals);
 
-    // Store quote ID for execution (in production, use a proper quote store)
-    const quoteId = `quote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    
     // Store quote in user memory for later execution
+    const quoteId = `quote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const quoteExpiry = Date.now() + QUOTE_TTL_MS;
+
     const memory = await getTradingMemory(userId);
     (memory as any).pendingQuote = {
       id: quoteId,
@@ -166,6 +168,8 @@ export async function get_swap_quote(
       toTokenSymbol: toTokenUpper,
       estimatedGas: quote.estimatedGas,
       slippage: 1.0,
+      createdAt: Date.now(),
+      expiresAt: quoteExpiry,
     };
     await setTradingMemory(userId, memory as any);
 
@@ -173,12 +177,13 @@ export async function get_swap_quote(
       success: true,
       data: {
         quoteId,
+        expiresAt: quoteExpiry,
         fromToken: fromTokenUpper,
         toToken: toTokenUpper,
         fromAmount: fromAmountFormatted,
         toAmount: toAmountFormatted,
         estimatedGas: quote.estimatedGas,
-        priceImpact: '~0.1%', // Would come from quote in production
+        priceImpact: '~0.1%',
       }
     };
   } catch (error) {
@@ -195,14 +200,58 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       return { success: false, error: 'No pending quote found. Get a fresh quote first.' };
     }
 
+    const now = Date.now();
+    const quoteAgeMs = pendingQuote.createdAt ? now - pendingQuote.createdAt : 0;
+    const quoteRemainingMs = pendingQuote.expiresAt ? pendingQuote.expiresAt - now : -1;
+
+    if (quoteRemainingMs < 0) {
+      delete (memory as any).pendingQuote;
+      await setTradingMemory(userId, memory as any);
+      return { success: false, error: 'Quote expired. Please request a new quote before trading.' };
+    }
+
+    if (quoteAgeMs > 5 * 60 * 1000) {
+      return { success: false, error: `Stale quote detected. Please request a new quote.` };
+    }
+
     const walletAddress = await getUserWalletAddress(userId);
     if (!walletAddress) {
       return { success: false, error: 'Wallet not connected.' };
     }
 
     const { fromTokenSymbol, toTokenSymbol, fromAmount, toAmount, fromToken, toToken } = pendingQuote;
+    const fromDecimals = fromTokenSymbol === 'USDC' ? 6 : 18;
+    const toDecimals = toTokenSymbol === 'USDC' ? 6 : 18;
+    const fromAmountBigInt = BigInt(fromAmount);
+    const toAmountBigInt = BigInt(toAmount);
 
-    // ─── Demo mode: simulate the trade ───
+    const parsedFromAmount = fromAmountBigInt.toString();
+    const quotedToAmount = toAmountBigInt.toString();
+
+    const freshQuote = await getSwapQuote(fromToken, toToken, parsedFromAmount, pendingQuote.slippage || 1.0);
+    if (!freshQuote) {
+      delete (memory as any).pendingQuote;
+      await setTradingMemory(userId, memory as any);
+      return { success: false, error: 'Could not refresh swap quote before execution. Try again.' };
+    }
+
+    const refreshedToAmount = BigInt(freshQuote.toAmount);
+    if (refreshedToAmount <= 0n) {
+      return { success: false, error: 'Refreshed quote returned zero output. Execution aborted.' };
+    }
+
+    const originalReceiveUnits = Number(toAmountBigInt) / 10 ** toDecimals;
+    const refreshedReceiveUnits = Number(refreshedToAmount) / 10 ** toDecimals;
+    const slippageBps = originalReceiveUnits > 0 ? ((originalReceiveUnits - refreshedReceiveUnits) / originalReceiveUnits) * 10_000 : 0;
+
+    if (slippageBps > 250) {
+      delete (memory as any).pendingQuote;
+      await setTradingMemory(userId, memory as any);
+      return {
+        success: false,
+        error: `Execution aborted: refreshed quote moved ${slippageBps.toFixed(1)} bps against you. Request a new quote.`,
+      };
+    }
     if (DEMO_MODE === 'true') {
       await new Promise(r => setTimeout(r, 1500));
 
@@ -245,12 +294,14 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     const swapTx = await getSwapTransaction(
       fromToken,
       toToken,
-      fromAmount,
+      freshQuote.fromAmount || fromAmount,
       walletAddress,
       pendingQuote.slippage || 1.0
     );
 
     if (!swapTx) {
+      delete (memory as any).pendingQuote;
+      await setTradingMemory(userId, memory as any);
       return { success: false, error: 'Could not get swap transaction data from 1inch.' };
     }
 
@@ -270,16 +321,19 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     const publicClient = createPublicClient({ chain, transport: http(BASE_RPC_URL) });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
+    const effectiveToAmount = freshQuote.toAmount || toAmount;
+    const effectiveFromAmount = freshQuote.fromAmount || fromAmount;
+
     const tx: Omit<Transaction, 'id'> = {
       timestamp: Date.now(),
       type: fromTokenSymbol === 'USDC' ? 'buy' : 'sell',
       fromToken: fromTokenSymbol,
       toToken: toTokenSymbol,
-      fromAmount: BigInt(fromAmount),
-      toAmount: BigInt(toAmount),
-      fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : 18),
-      toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : 18),
-      priceUSD: Number(toAmount) / Number(fromAmount),
+      fromAmount: BigInt(effectiveFromAmount),
+      toAmount: BigInt(effectiveToAmount),
+      fromAmountFormatted: formatAmount(BigInt(effectiveFromAmount), fromDecimals),
+      toAmountFormatted: formatAmount(BigInt(effectiveToAmount), toDecimals),
+      priceUSD: Number(effectiveToAmount) / Number(effectiveFromAmount),
       txHash: txHash,
       status: receipt.status === 'success' ? 'confirmed' : 'failed',
       gasUsed: receipt.gasUsed || BigInt(pendingQuote.estimatedGas || 150000),

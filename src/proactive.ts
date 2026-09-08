@@ -154,19 +154,26 @@ async function checkDcaStrategies(
     const lastExecuted = params.lastExecuted || 0;
     if (now - lastExecuted < intervalMs) continue;
 
-    // Execute DCA: get swap quote and record transaction
+    // Execute DCA: validate, refresh quote, and execute safely
     const usdcAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
     const tokenSymbol = params.token.toUpperCase() as keyof typeof B20_TOKENS;
     const tokenAddress = B20_TOKENS[tokenSymbol];
-    if (!tokenAddress) continue;
+    if (!tokenAddress) {
+      await sendMessage(userId, `🔄 DCA: Unknown token ${params.token}. Please update your strategy.`);
+      continue;
+    }
 
-    const amountInUsdc = parseAmount(params.amount, 6);
+    const parsedAmount = parseAmount(params.amount, 6);
+    if (parsedAmount <= 0n) {
+      await sendMessage(userId, `🔄 DCA: Invalid amount ${params.amount} USDC for ${params.token}.`);
+      continue;
+    }
 
     try {
-      const quote = await getSwapQuote(usdcAddress, tokenAddress, amountInUsdc.toString());
-      if (!quote) {
+      const quote = await getSwapQuote(usdcAddress, tokenAddress, parsedAmount.toString());
+      if (!quote || BigInt(quote.toAmount) <= 0n) {
         await sendMessage(userId,
-          `🔄 DCA: Couldn't get a quote for ${params.amount} USDC → ${params.token}. Will retry next cycle.`
+          `🔄 DCA: Couldn't get a valid quote for ${params.amount} USDC → ${params.token}. Will retry next cycle.`
         );
         continue;
       }
@@ -174,33 +181,38 @@ async function checkDcaStrategies(
       const receivedAmount = formatAmount(BigInt(quote.toAmount), 18);
       const txHash = DEMO_MODE === 'true'
         ? `0xdca${Date.now().toString(16).padStart(58, '0')}`
-        : `0xdca${Date.now().toString(16).padStart(58, '0')}`; // TODO: real execution in task #4
+        : undefined;
 
-      // Record transaction
-      await addTransaction(userId, {
-        timestamp: now,
-        type: 'dca',
-        fromToken: 'USDC',
-        toToken: params.token,
-        fromAmount: BigInt(amountInUsdc),
-        toAmount: BigInt(quote.toAmount),
-        fromAmountFormatted: params.amount,
-        toAmountFormatted: receivedAmount,
-        priceUSD: Number(params.amount) / Number(receivedAmount),
-        txHash,
-        status: 'confirmed',
-        gasUsed: 145000n,
-        gasPrice: 1000000000n,
-      });
+      if (txHash) {
+        await addTransaction(userId, {
+          timestamp: now,
+          type: 'dca',
+          fromToken: 'USDC',
+          toToken: tokenSymbol,
+          fromAmount: parsedAmount,
+          toAmount: BigInt(quote.toAmount),
+          fromAmountFormatted: params.amount,
+          toAmountFormatted: receivedAmount,
+          priceUSD: Number(quote.toAmount) / Number(parsedAmount),
+          txHash,
+          status: 'confirmed',
+          gasUsed: 145000n,
+          gasPrice: 1000000000n,
+        });
 
-      // Update lastExecuted timestamp
-      params.lastExecuted = now;
-      await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
+        params.lastExecuted = now;
+        await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
 
-      await sendMessage(userId,
-        `🔄 DCA executed: ${params.amount} USDC → ${receivedAmount} ${params.token}. ` +
-        `Next ${params.frequency} DCA scheduled. Tx: ${txHash.slice(0, 10)}...`
-      );
+        await sendMessage(userId,
+          `🔄 DCA executed: ${params.amount} USDC → ${receivedAmount} ${params.token}. ` +
+          `Next ${params.frequency} DCA scheduled. Tx: ${txHash.slice(0, 10)}...`
+        );
+      } else {
+        await sendMessage(userId,
+          `🔄 DCA prepared ${params.amount} USDC → ~${receivedAmount} ${params.token}, ` +
+          `but real execution isn't wired in proactive DCA yet. No transaction was submitted.`
+        );
+      }
     } catch (error) {
       console.error(`DCA execution failed for ${userId}:`, error);
       await sendMessage(userId,
