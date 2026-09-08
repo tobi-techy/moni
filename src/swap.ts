@@ -134,7 +134,7 @@ export async function getSwapTransaction(
   }
 }
 
-// Get token price from 1inch Price API
+// Get token price from 1inch Price API (USD per whole token)
 export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price: string; timestamp: number } | null> {
   if (DEMO_MODE === 'true') {
     return { price: '100', timestamp: Date.now() };
@@ -159,8 +159,12 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
       throw new Error(`1inch Price API error: ${response.status}`);
     }
 
-    const data = await response.json() as { price: string; timestamp: number };
-    return data;
+    const data = await response.json() as Record<string, any>;
+    // The price API returns the USD price keyed by token address, plus a timestamp.
+    const price = data[tokenAddress] ?? data.price;
+    const timestamp = data.timestamp ?? Date.now();
+    if (typeof price !== 'string' && typeof price !== 'number') return null;
+    return { price: String(price), timestamp: Number(timestamp) };
   } catch (error) {
     console.error('Error getting 1inch price:', error);
     return null;

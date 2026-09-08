@@ -5,7 +5,7 @@ import { typing } from 'spectrum-ts';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { startProactiveMonitoring, triggerProactiveCheck, sendDailySummary } from './proactive.js';
-import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
+import { getUserWalletAddress, getUserWalletClient, registerWallet } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
@@ -189,8 +189,6 @@ async function handlePortfolio(space: any, userId: string) {
     return;
   }
 
-  await space.send('📊 Fetching your portfolio...');
-  
   try {
     const portfolio = await getPortfolio(walletAddress);
     const message = formatPortfolioMessage(portfolio);
@@ -198,8 +196,7 @@ async function handlePortfolio(space: any, userId: string) {
   } catch (error) {
     console.error('Portfolio error:', error);
     await space.send('❌ Error fetching portfolio. Please try again.');
-  }
-}
+  }}
 
 // Handle price command
 async function handlePrice(space: any, symbol: string) {
@@ -260,8 +257,6 @@ async function handleBuy(space: any, userId: string, args: string[]) {
   }
 
   // Get quote
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
-  
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 6).toString());
   
   if (!quote) {
@@ -332,10 +327,7 @@ async function handleSell(space: any, userId: string, args: string[]) {
     return;
   }
 
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
-  
-  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());
-  
+  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());  
   if (!quote) {
     await space.send('❌ Could not get quote.');
     return;
@@ -387,8 +379,6 @@ async function handleConfirm(space: any, userId: string) {
   
   if (DEMO_MODE === 'true') {
     // Demo mode: simulate trade
-    await space.send('⏳ **Executing trade (demo mode)...**');
-    
     // Simulate delay
     await new Promise(r => setTimeout(r, 2000));
     
@@ -452,8 +442,6 @@ async function handleWatchlist(space: any, userId: string, args: string[]) {
     await space.send(`✅ Removed ${symbol} from watchlist.`);
   } else {
     // Show watchlist with prices
-    await space.send('📋 Fetching watchlist prices...');
-    
     const prices = await Promise.all(
       memory.watchlist.map(async (symbol: string) => {
         const priceData = await getTokenPrice(symbol as B20TokenSymbol);
@@ -648,14 +636,13 @@ async function handleHelp(space: any) {
 }
 
 // Handle connect
-async function handleConnect(space: any, userId: string) {
+async function handleConnect(space: any, userId: string, arg?: string) {
   const session = getSession(userId);
-  
+
   if (session.authenticated && session.walletAddress) {
     await space.send(
-      `✅ **Wallet Connected**\n\n` +
-      `Address: ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\n\n` +
-      `You're ready to trade! Try \`/portfolio\` or \`/price AAPL\``
+      `You're all set — wallet ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)} is connected. ` +
+      `Want to see your portfolio or check a price?`
     );
     return;
   }
@@ -665,22 +652,37 @@ async function handleConnect(space: any, userId: string) {
     const demoAddress = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
     session.walletAddress = demoAddress;
     session.authenticated = true;
-    
+
     await space.send(
-      `✅ **Demo Wallet Connected**\n\n` +
-      `Address: ${demoAddress.slice(0, 6)}...${demoAddress.slice(-4)}\n\n` +
-      `You're in demo mode - all trades are simulated.\n` +
-      `Try \`/portfolio\` or \`/buy 100 USDC AAPL\``
+      `You're connected (demo wallet ${demoAddress.slice(0, 6)}...${demoAddress.slice(-4)}). ` +
+      `Trades are simulated here, so feel free to try one — say "buy $500 of AAPL".`
     );
-  } else {
-    // Real mode: send Privy connection link
-    await space.send(
-      `🔐 **Connect Your Wallet**\n\n` +
-      `Click the link below to connect your wallet via Privy:\n` +
-      `https://auth.privy.io/connect?app_id=${process.env.PRIVY_APP_ID}\n\n` +
-      `After connecting, send \`/wallet\` to verify.`
-    );
+    return;
   }
+
+  // Real mode: register the Privy identity the user authenticated with.
+  const privyUserId = arg?.startsWith('did:privy:') ? arg : undefined;
+  const walletAddress = !privyUserId && arg && /^0x[a-fA-F0-9]{40}$/.test(arg) ? arg : undefined;
+
+  if (privyUserId || walletAddress) {
+    await registerWallet(userId, privyUserId ? { privyUserId } : { walletAddress: walletAddress as Address });
+    const resolved = await getUserWalletAddress(userId);
+    if (resolved) {
+      session.walletAddress = resolved;
+      session.authenticated = true;
+      await space.send(
+        `Got it — your wallet ${resolved.slice(0, 6)}...${resolved.slice(-4)} is connected. ` +
+        `Want to see your portfolio or check a price?`
+      );
+      return;
+    }
+    await space.send("I saved that, but couldn't resolve a wallet from it yet. Double-check the address and try again.");
+    return;
+  }
+
+  await space.send(
+    `To connect, authenticate with Privy, then send me your Privy user id (starts with did:privy:) or your wallet address, like: /connect 0xYourWalletAddress`
+  );
 }
 
 // Natural language handling via the Moni agent
@@ -690,8 +692,6 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 
   if (firstContact) {
     await space.send(buildWelcomeMessage(session.authenticated && !!session.walletAddress));
-  } else {
-    await space.send('🤔 Thinking...');
   }
 
   try {
@@ -702,24 +702,22 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
     await space.send(response);
   } catch (error) {
     console.error('Agent error:', error);
-    await space.send('❌ Sorry, I had trouble processing that. Try a command or ask again.');
+    await space.send("Sorry, I hit a snag there. Mind trying that again?");
   }
 }
 
 // First-time welcome — kept short, no slash-command pressure
 function buildWelcomeMessage(walletConnected: boolean): string {
   let message =
-    '👋 Hey, I\'m Moni — your on-chain portfolio manager for tokenized stocks, right here in iMessage.\n\n' +
-    'No apps, no commands — just tell me what you want. A few things you can ask:\n\n' +
-    '• "What\'s my portfolio worth?"\n' +
-    '• "Buy $500 of AAPL with USDC"\n' +
-    '• "How risky is my portfolio?"\n';
+    "Hey, I'm Moni — I keep an eye on your tokenized stocks, right here in iMessage. " +
+    "No apps, no commands, just tell me what you want. Ask what your portfolio's worth, " +
+    "or say something like \"buy $500 of AAPL\".";
 
   if (!walletConnected) {
-    message += '\nFirst though, I\'ll need your wallet connected to see your holdings. Send /connect and I\'ll set you up.\n';
+    message += " One thing first — I'll need your wallet connected to see your holdings. Just say \"connect\" when you're ready.";
   }
 
-  message += '\nWhat\'s on your mind?';
+  message += " What's on your mind?";
   return message;
 }
 
@@ -818,7 +816,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   }
   
   if (lower === '/connect' || lower === '/wallet' || lower === '/login') {
-    await handleConnect(space, userId);
+    await handleConnect(space, userId, trimmed.split(' ')[1]);
     return;
   }
   
