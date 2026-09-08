@@ -1,26 +1,37 @@
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
-import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE } from './env.js';
-import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
+import { typing } from 'spectrum-ts';
+import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
+import { BASE_RPC_URL } from './env.js';
+import { handleConversation, ensureWalletConnected } from './conversation.js';
+import { startProactiveMonitoring } from './proactive.js';
+import { getUserWalletAddress } from './wallet.js';
+import { startHealthServer } from './health.js';
+import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
-import { 
-  handleStopLoss, 
-  handleRebalance, 
-  handleSentiment,
-  checkStopLosses 
-} from './automation.js';
-import { createPublicClient, http, type Address } from 'viem';
+import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
+import { createPublicClient, http, type Address as ViemAddress } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
-import { BASE_RPC_URL } from './env.js';
+
+// Structured logging
+const log = {
+  info: (msg: string, meta?: Record<string, any>) => console.log(JSON.stringify({ level: 'info', msg, ...meta, timestamp: new Date().toISOString() })),
+  warn: (msg: string, meta?: Record<string, any>) => console.warn(JSON.stringify({ level: 'warn', msg, ...meta, timestamp: new Date().toISOString() })),
+  error: (msg: string, meta?: Record<string, any>) => console.error(JSON.stringify({ level: 'error', msg, ...meta, timestamp: new Date().toISOString() })),
+};
+
+// Start health check server for AtlasFlow/container orchestration
+await startHealthServer();
 
 // Validate environment on startup
 const envValidation = validateEnv();
 if (!envValidation.valid && DEMO_MODE !== 'true') {
-  console.error('Missing required environment variables:', envValidation.missing);
+  log.error('Missing required environment variables', { missing: envValidation.missing });
   process.exit(1);
 }
 
@@ -37,12 +48,14 @@ interface UserSession {
     amount: string;
   };
   tradingMemory: TradingMemory;
+  lastActive: number;
+  space?: any;
 }
 
 const userSessions = new Map<string, UserSession>();
 
 // Get or create user session
-function getSession(userId: string): UserSession {
+function getSession(userId: string, space?: any): UserSession {
   let session = userSessions.get(userId);
   if (!session) {
     session = {
@@ -64,8 +77,14 @@ function getSession(userId: string): UserSession {
           notificationLevel: 'trades',
         },
       },
+      lastActive: Date.now(),
+      space: space || null,
     };
     userSessions.set(userId, session);
+  }
+  session.lastActive = Date.now();
+  if (space) {
+    session.space = space;
   }
   return session;
 }
@@ -636,7 +655,7 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 
 // Main message handler
 async function handleMessage(space: any, userId: string, text: string) {
-  const session = getSession(userId);
+  const session = getSession(userId, space);
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
   console.log('📩 Message received:', JSON.stringify({ userId, text: trimmed }));
@@ -737,10 +756,45 @@ async function handleMessage(space: any, userId: string, text: string) {
   await handleNaturalLanguage(space, userId, text);
 }
 
+// Graceful shutdown handler
+let isShuttingDown = false;
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+async function shutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  log.info(`Received ${signal}, starting graceful shutdown...`);
+  
+  // Stop session cleanup
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+  }
+  
+  // Clear sessions
+  userSessions.clear();
+  
+  log.info('Shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled rejection', { reason: String(reason) });
+});
+process.on('uncaughtException', (error) => {
+  log.error('Uncaught exception', { error: error.message, stack: error.stack });
+  shutdown('uncaughtException');
+});
+
 // Check if we have valid Spectrum credentials
 const hasSpectrumCredentials = PROJECT_ID && PROJECT_SECRET && PROJECT_ID.length > 10;
 
-// Create Spectrum app or run in CLI mode
+// Check if we're in an interactive TTY (for CLI mode)
+const isInteractive = process.stdin.isTTY;
+
+// Create Spectrum app or run in appropriate mode
 if (hasSpectrumCredentials) {
   const providers = DEMO_MODE === 'true'
     ? [imessage.config(), terminal.config()]
@@ -750,30 +804,98 @@ if (hasSpectrumCredentials) {
     projectId: PROJECT_ID,
     projectSecret: PROJECT_SECRET,
     providers,
+    webhookSecret: SPECTRUM_WEBHOOK_SECRET || undefined,
   });
 
-  console.log('🚀 Moni iMessage Trading Agent started!');
-  console.log(`📱 Demo mode: ${DEMO_MODE}`);
-  console.log(`🌐 Base RPC: ${BASE_RPC_URL}`);
+  log.info('Moni iMessage Trading Agent started', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
 
-  // Handle incoming messages
-  for await (const [space] of app.messages) {
-    // @ts-ignore - Spectrum space types
-    const userId = space.user?.id || space.id || `space-${Date.now()}`;
+  // Start session cleanup
+  cleanupInterval = startSessionCleanup();
+
+  // Start proactive monitoring in background
+  startProactiveMonitoring(
+    sendProactiveMessage,
+    () => Array.from(userSessions.keys()).filter(id => userSessions.get(id)?.space)
+  ).catch(err => {
+    log.error('Proactive monitoring failed to start', { error: err.message });
+  });
+  log.info('Proactive monitoring started', { interval: '60s' });
+
+  // Start webhook server if webhook secret is configured
+  if (SPECTRUM_WEBHOOK_SECRET) {
+    const webhookServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url?.endsWith('/spectrum/webhook')) {
+        // Collect raw body for HMAC verification
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks);
+        
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value) headers[key] = Array.isArray(value) ? value[0] : value;
+        }
+        
+        try {
+          const result = await app.webhook(
+            { body, headers },
+            async (space: any, message: any) => {
+              // Handle message (fire-and-forget)
+              if (message.content?.type === 'text' && message.content.text) {
+                const userId = space.user?.id || space.id || 'unknown';
+                await handleMessage(space, userId, message.content.text);
+              }
+            }
+          );
+          
+          res.writeHead(result.status, result.headers);
+          res.end(Buffer.from(result.body));
+        } catch (error) {
+          console.error('Webhook error:', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+        return;
+      }
+      
+      // Health check endpoint
+      if (req.method === 'GET' && req.url?.endsWith('/health')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+        return;
+      }
+      
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    });
+    
+    webhookServer.listen(WEBHOOK_PORT, () => {
+      log.info(`Webhook server listening`, { port: WEBHOOK_PORT, path: '/spectrum/webhook' });
+      log.info(`Health check`, { path: '/health' });
+    });
+  }
+
+  // Handle incoming messages via streaming (FIXED: proper destructuring)
+  for await (const [space, message] of app.messages) {
+    // Skip outbound messages (our own responses)
+    if (message.direction === 'outbound') continue;
     
     // @ts-ignore - Spectrum space types
-    for await (const message of space.messages) {
-      if (message.text) {
-        await handleMessage(space, userId, message.text);
-      }
+    const userId = space.user?.id || space.id || 'unknown';
+    
+    if (message.content?.type === 'text' && message.content.text) {
+      await handleMessage(space, userId, message.content.text);
     }
   }
-} else {
-  // CLI mode for demo/testing without Spectrum credentials
-  console.log('🚀 Moni Trading Agent (CLI Demo Mode)');
-  console.log(`📱 Demo mode: ${DEMO_MODE}`);
-  console.log(`🌐 Base RPC: ${BASE_RPC_URL}`);
-  console.log('\nType commands like "/portfolio", "/price AAPL", "/buy 100 USDC AAPL", "/help"');
+} else if (isInteractive) {
+  // CLI mode for demo/testing without Spectrum credentials (only in interactive TTY)
+  log.info('Moni Trading Agent (CLI Demo Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  console.log('\nJust chat naturally. Examples:');
+  console.log('  "What\'s my portfolio?"');
+  console.log('  "Buy $100 of AAPL with USDC"');
+  console.log('  "Set stop-loss for NVDA at $800"');
+  console.log('  "How risky is my portfolio?"');
   console.log('Type "exit" to quit\n');
 
   const readline = await import('readline');
@@ -785,8 +907,26 @@ if (hasSpectrumCredentials) {
 
   const demoUserId = 'demo-user';
   let space: any = {
-    send: async (text: string) => console.log(`\n🤖 ${text}\n`),
+    send: async (text: string) => console.log(`\n${text}\n`),
   };
+
+  // Register demo user session with space for proactive monitoring
+  getSession(demoUserId, space);
+
+  // Start proactive monitoring in CLI mode too
+  startProactiveMonitoring(
+    async (userId: string, message: string) => {
+      const session = userSessions.get(userId);
+      if (session?.space) {
+        await session.space.send(message);
+      } else {
+        console.log(`\n📱 [Proactive → ${userId}]: ${message}\n`);
+      }
+    },
+    () => [demoUserId]
+  ).catch(err => {
+    log.error('Proactive monitoring failed to start', { error: err.message });
+  });
 
   rl.prompt();
 
@@ -802,4 +942,19 @@ if (hasSpectrumCredentials) {
     }
     rl.prompt();
   });
+  
+  // Handle CLI shutdown
+  rl.on('close', () => {
+    shutdown('CLI close');
+  });
+} else {
+  // Production mode without Spectrum credentials - keep health server running
+  log.info('Moni Trading Agent (Background Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  
+  // Start session cleanup
+  cleanupInterval = startSessionCleanup();
+
+  // Keep process alive for health checks
+  await new Promise(() => {}); // Never resolves - keeps process running
 }
+

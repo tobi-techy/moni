@@ -1,5 +1,6 @@
 import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
-import { getTokenPrice } from './base.js';
+import { getTokenPrice, getPortfolio, formatUSD } from './base.js';
+import { getUserWalletAddress } from './wallet.js';
 
 // Stop-loss / Take-profit automation
 export interface StopLossConfig {
@@ -109,17 +110,35 @@ export async function checkRebalanceNeeded(userId: string): Promise<{
   const strategy = rebalanceStrategies[0];
   const config = strategy.params as RebalanceConfig;
   
-  // Get current portfolio
-  // In production, would fetch actual portfolio
-  // For demo, simulate
+  // Get current portfolio from onchain data
+  const walletAddress = await getUserWalletAddress(userId);
+  if (!walletAddress) {
+    return null;
+  }
+
+  const portfolio = await getPortfolio(walletAddress);
+  if (portfolio.length === 0) {
+    return null;
+  }
+
+  // Calculate total portfolio value
+  let totalValue = 0n;
+  for (const holding of portfolio) {
+    totalValue += holding.valueUSD;
+  }
+
+  if (totalValue === 0n) {
+    return null;
+  }
+
+  // Build current allocation map (symbol → percentage)
+  const currentAllocation: Record<string, number> = {};
+  for (const holding of portfolio) {
+    const pct = Number((holding.valueUSD * 10000n) / totalValue) / 100;
+    currentAllocation[holding.symbol] = pct;
+  }
+
   const suggestions: Array<{ symbol: string; currentPct: number; targetPct: number; action: 'buy' | 'sell'; amount: string }> = [];
-  
-  // Simulate current allocation
-  const currentAllocation: Record<string, number> = {
-    AAPL: 40,
-    NVDA: 35,
-    MSFT: 25,
-  };
   
   let needed = false;
   for (const [symbol, targetPct] of Object.entries(config.targetAllocation)) {
@@ -128,12 +147,15 @@ export async function checkRebalanceNeeded(userId: string): Promise<{
     
     if (Math.abs(diff) > config.tolerance) {
       needed = true;
+      // Calculate dollar amount needed to rebalance
+      const totalValueNum = Number(formatUSD(totalValue).replace(/[$,]/g, ''));
+      const dollarAmount = (Math.abs(diff) / 100) * totalValueNum;
       suggestions.push({
         symbol,
         currentPct,
         targetPct,
         action: diff > 0 ? 'sell' : 'buy',
-        amount: `${Math.abs(diff)}%`,
+        amount: `${Math.abs(diff).toFixed(1)}% (~$${dollarAmount.toFixed(0)})`,
       });
     }
   }
