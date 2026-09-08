@@ -1,4 +1,4 @@
-import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
+import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { checkStopLosses, checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress } from './wallet.js';
 import { formatUSD, formatBalance, B20_TOKENS } from './base.js';
@@ -158,7 +158,7 @@ export async function handleConversation(space: any, userId: string, message: st
     discussedTokens: extractTokens(message),
   });
 
-  // Send to Letta agent with tool access
+  // Send to AI agent with tool access
   const response = await sendAgentMessage(userId, message);
   
   // Send response to user

@@ -19,13 +19,14 @@
     "agentic",
     "spectrum",
     "privy",
-    "letta"
+    "cencori"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@1inch/cross-chain-sdk": "^2.2.2",
     "@privy-io/server-auth": "^1.32.5",
+    "cencori": "^1.6.1",
     "dotenv": "^17.4.2",
     "spectrum-ts": "^12.8.0",
     "viem": "^2.56.3"

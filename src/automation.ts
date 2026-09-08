@@ -1,4 +1,4 @@
-import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
+import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { getTokenPrice, getPortfolio, formatUSD } from './base.js';
 import { getUserWalletAddress } from './wallet.js';
 

@@ -10,7 +10,7 @@ import { analyzePortfolio, formatAnalytics, getPriceChanges } from './src/analyt
 import { getTransactionHistory, formatTransactionHistory } from './src/history.js';
 import { getTokenPrice, formatUSD, formatBalance, B20_TOKENS } from './src/base.js';
 import { getSwapQuote, parseAmount, formatAmount } from './src/swap.js';
-import { getTradingMemory, setTradingMemory } from './src/letta.js';
+import { getTradingMemory, setTradingMemory } from './src/ai.js';
 import { checkStopLosses } from './src/automation.js';
 
 // Demo user ID
@@ -222,7 +222,7 @@ async function runDemo() {
   console.log('   ✅ Real-time Chainlink price feeds');
   console.log('   ✅ 1inch DEX aggregation for swaps');
   console.log('   ✅ Embedded wallets via Privy');
-  console.log('   ✅ Agentic portfolio management (Letta)');
+  console.log('   ✅ Agentic portfolio management (Cencori AI)');
   console.log('   ✅ Automated strategies: DCA, alerts, stop-loss, rebalance');
   console.log('   ✅ Natural language queries');
   console.log('   ✅ Portfolio analytics & risk assessment');

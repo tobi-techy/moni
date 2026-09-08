@@ -5,7 +5,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 ## Features
 
 - 📱 **iMessage Native**: Trade via text messages in the Messages app
-- 🤖 **Agentic Assistant**: Letta-powered agent with memory, learning, and autonomous strategies
+- 🤖 **Agentic Assistant**: Cencori-powered agent with memory, learning, and autonomous strategies
 - 💼 **Portfolio Management**: View holdings, track P&L, real-time prices
 - 🔄 **Automated Strategies**: DCA, price alerts, stop-loss, take-profit
 - 🔐 **Embedded Wallets**: Privy-powered wallet abstraction (no seed phrases)
@@ -20,7 +20,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 - [Photon/Spectrum account](https://app.photon.codes/) for iMessage infrastructure
 - [Privy account](https://privy.io/) for embedded wallets
 - [1inch API key](https://portal.1inch.dev/) for DEX aggregation (optional for demo)
-- [Letta API key](https://www.letta.com/) for agent memory (optional for demo)
+- [Cencori API key](https://cencori.com) for the AI agent (optional for demo)
 
 ### Installation
 
@@ -37,7 +37,7 @@ cp .env.example .env
 # PRIVY_APP_ID, PRIVY_APP_SECRET from Privy dashboard
 # BASE_RPC_URL (mainnet or sepolia)
 # ONEINCH_API_KEY (optional, for real swaps)
-# LETTA_API_KEY (optional, for agent memory)
+# CENCORI_API_KEY (optional, for the AI agent; demo mode doesn't need it)
 # DEMO_MODE=true (for Builder Quest submission)
 ```
 
@@ -72,7 +72,8 @@ npm start
 | `PRIVY_APP_SECRET` | Yes | Privy App Secret |
 | `BASE_RPC_URL` | Yes | Base RPC endpoint (mainnet or sepolia) |
 | `ONEINCH_API_KEY` | No | 1inch API key for swap quotes |
-| `LETTA_API_KEY` | No | Letta API key for agent memory |
+| `CENCORI_API_KEY` | No | Cencori API key for the AI agent |
+| `CENCORI_MODEL` | No | AI model (default: `claude-sonnet-4.5`) |
 | `DEMO_MODE` | No | Set to `true` for simulated trades (default: true) |
 
 ## Commands
@@ -108,12 +109,12 @@ iMessage User
     ↓ (Spectrum-TS iMessage Provider)
 Spectrum Agent Server (Node.js/Bun)
     ├── Privy Wallet Adapter (embedded wallet)
-    ├── Letta Agent Core (memory/context/learning)
+    ├── Cencori Agent Core (LLM + tool calling + memory)
     ├── Base RPC Client (mainnet)
     │   ├── B20 Token Contracts (AAPLc, NVDAc, etc.)
     │   ├── Chainlink Price Feeds (onchain oracle)
     │   └── 1inch/Aerodrome DEX Aggregator (swaps)
-    └── Letta Memory Service (Git-based context)
+    └── Local Memory Store (.moni-data JSON persistence)
 ```
 
 ## Supported Tokens (Coinbase Tokenized Stocks on Base)

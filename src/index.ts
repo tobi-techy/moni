@@ -6,12 +6,12 @@ import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SE
 import { BASE_RPC_URL } from './env.js';
 import { handleConversation, ensureWalletConnected } from './conversation.js';
 import { startProactiveMonitoring } from './proactive.js';
-import { getUserWalletAddress } from './wallet.js';
+import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
-import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
+import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
@@ -87,6 +87,46 @@ function getSession(userId: string, space?: any): UserSession {
     session.space = space;
   }
   return session;
+}
+
+// Send a proactive message to a user via their stored Spectrum space
+async function sendProactiveMessage(userId: string, message: string): Promise<void> {
+  const session = userSessions.get(userId);
+  if (!session?.space) {
+    log.warn('Cannot send proactive message — no space for user', { userId });
+    return;
+  }
+  try {
+    await session.space.send(message);
+  } catch (error) {
+    log.error('Failed to send proactive message', { userId, error: (error as Error).message });
+  }
+}
+
+// Periodic cleanup of stale sessions (keep sessions with spaces for proactive messaging)
+const SESSION_TTL = 5 * 60 * 1000;
+const CLEANUP_INTERVAL = 5 * 60 * 1000;
+
+function startSessionCleanup(): NodeJS.Timeout {
+  return setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [userId, session] of userSessions.entries()) {
+      // Don't clean up sessions that have a space (needed for proactive messages)
+      if (session.space && now - session.lastActive > SESSION_TTL * 6) {
+        // Keep space sessions 6x longer (30 min) so proactive monitoring can reach them
+        session.space = null;
+        userSessions.delete(userId);
+        cleaned++;
+      } else if (!session.space && now - session.lastActive > SESSION_TTL) {
+        userSessions.delete(userId);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      log.info('Cleaned up stale sessions', { count: cleaned, remaining: userSessions.size });
+    }
+  }, CLEANUP_INTERVAL);
 }
 
 // Initialize wallet for user

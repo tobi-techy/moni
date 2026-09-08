@@ -33,3 +33,6 @@ coverage/
 
 # Misc
 *.tsbuildinfo
+
+# Local runtime data (Cencori agent memory + conversation history)
+.moni-data/

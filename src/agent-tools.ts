@@ -1,6 +1,6 @@
 import { getPortfolio, getTokenPrice, getB20Address, formatUSD, formatBalance, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
-import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
+import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { analyzePortfolio, PortfolioAnalytics } from './analytics.js';
 import { checkStopLosses, getActiveStopLosses, StopLossConfig } from './automation.js';
 import { checkRebalanceNeeded } from './automation.js';

@@ -1,5 +1,5 @@
 import { getPortfolio, getTokenPrice, formatUSD } from './base.js';
-import { getTradingMemory, setTradingMemory } from './letta.js';
+import { getTradingMemory, setTradingMemory } from './ai.js';
 
 // Portfolio Analytics
 export interface PortfolioAnalytics {

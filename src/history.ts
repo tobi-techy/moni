@@ -1,4 +1,4 @@
-import { getTradingMemory, setTradingMemory } from './letta.js';
+import { getTradingMemory, setTradingMemory } from './ai.js';
 import { formatUSD, formatBalance } from './base.js';
 
 export interface Transaction {
