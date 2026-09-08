@@ -1,6 +1,7 @@
 import { LETTA_API_KEY, LETTA_BASE_URL, LETTA_MODEL, DEMO_MODE } from './env.js';
 import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { B20_TOKENS } from './constants.js';
+import { getTradingMemory, setTradingMemory, TradingMemory } from './letta.js';
 
 // ─── Letta API Types (matching the REST API response format) ───────────────
 
@@ -101,36 +102,6 @@ const CLIENT_TOOLS = TOOL_DEFINITIONS.map((t) => ({
   parameters: t.parameters,
 }));
 
-// ─── Local trading memory (application state, not agent identity) ───────────
-// Trading memory is application state (watchlist, risk params, strategies).
-// It belongs in local storage, not in Letta's core memory blocks which are for
-// the agent's identity and behavioral context.
-
-const localTradingMemory = new Map<string, TradingMemory>();
-
-function defaultTradingMemory(): TradingMemory {
-  return {
-    watchlist: ['AAPL', 'NVDA', 'MSFT'],
-    riskParams: {
-      maxPositionSizeUSD: 10000,
-      maxDailyLossUSD: 1000,
-      autoTradeEnabled: false,
-    },
-    activeStrategies: [],
-    preferences: {
-      defaultSlippage: 1.0,
-      preferredTokens: ['AAPL', 'NVDA', 'MSFT'],
-      notificationLevel: 'trades',
-    },
-    transactionHistory: [],
-    conversationContext: {
-      lastTopic: '',
-      pendingDecision: '',
-      discussedTokens: [],
-    },
-  };
-}
-
 // ─── Letta API Client ───────────────────────────────────────────────────────
 
 class LettaClient {
@@ -162,9 +133,13 @@ class LettaClient {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      const error = new Error(`Letta API error: ${response.status} ${response.statusText}\nEndpoint: ${endpoint}\n${errorText}`);
+      const body = await response.text().catch(() => 'Unknown error');
+      const error = new Error(`Letta API error: ${response.status} ${response.statusText}\nEndpoint: ${endpoint}\n${body}`);
       console.error(error.message);
+      // @ts-ignore
+      error.status = response.status;
+      // @ts-ignore
+      error.body = body;
       throw error;
     }
 
@@ -567,6 +542,32 @@ function extractTokens(text: string): string[] {
   return [...new Set(found)];
 }
 
+export interface TradingMemory {
+  watchlist: string[];
+  riskParams: {
+    maxPositionSizeUSD: number;
+    maxDailyLossUSD: number;
+    autoTradeEnabled: boolean;
+  };
+  activeStrategies: Array<{
+    type: 'dca' | 'stop_loss' | 'take_profit' | 'rebalance' | 'price_alert';
+    params: any;
+    active: boolean;
+  }>;
+  preferences: {
+    defaultSlippage: number;
+    preferredTokens: string[];
+    notificationLevel: 'all' | 'trades' | 'alerts' | 'none';
+  };
+  transactionHistory?: any[];
+  conversationContext?: {
+    lastTopic: string;
+    pendingDecision: string;
+    discussedTokens: string[];
+  };
+  pendingQuote?: any;
+}
+
 // ─── Trading memory (local storage) ─────────────────────────────────────────
 
 export interface TradingMemory {
@@ -596,21 +597,51 @@ export interface TradingMemory {
 }
 
 export async function getTradingMemory(userId: string): Promise<TradingMemory> {
-  let memory = localTradingMemory.get(userId);
+  return getTradingMemoryFromMap(userId);
+}
+
+export async function setTradingMemory(userId: string, updates: Partial<TradingMemory>): Promise<void> {
+  return setTradingMemoryInMap(userId, updates);
+}
+
+function getTradingMemoryFromMap(userId: string): TradingMemory {
+  let memory = (globalThis as any).__moniTradingMemory?.get(userId);
   if (!memory) {
-    memory = defaultTradingMemory();
-    localTradingMemory.set(userId, memory);
+    memory = {
+      watchlist: ['AAPL', 'NVDA', 'MSFT'],
+      riskParams: {
+        maxPositionSizeUSD: 10000,
+        maxDailyLossUSD: 1000,
+        autoTradeEnabled: false,
+      },
+      activeStrategies: [],
+      preferences: {
+        defaultSlippage: 1.0,
+        preferredTokens: ['AAPL', 'NVDA', 'MSFT'],
+        notificationLevel: 'trades',
+      },
+      transactionHistory: [],
+      conversationContext: {
+        lastTopic: '',
+        pendingDecision: '',
+        discussedTokens: [],
+      },
+    };
+    (globalThis as any).__moniTradingMemory ??= new Map<string, TradingMemory>();
+    (globalThis as any).__moniTradingMemory.set(userId, memory);
   }
   return memory;
 }
 
-export async function setTradingMemory(userId: string, updates: Partial<TradingMemory>): Promise<void> {
-  const current = await getTradingMemory(userId);
+function setTradingMemoryInMap(userId: string, updates: Partial<TradingMemory>): void {
+  const current = getTradingMemoryFromMap(userId);
   const updated = { ...current, ...updates };
-  localTradingMemory.set(userId, updated);
+  (globalThis as any).__moniTradingMemory ??= new Map<string, TradingMemory>();
+  (globalThis as any).__moniTradingMemory.set(userId, updated);
 }
 
 export async function updateUserMemory(userId: string, _memory: any): Promise<void> {
   // No-op: trading memory is now handled locally via getTradingMemory/setTradingMemory.
   // Kept for backward compatibility with any callers that still reference it.
 }
+
