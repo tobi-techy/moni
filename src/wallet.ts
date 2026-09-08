@@ -30,16 +30,14 @@ export async function createUserWalletClient(userId: string): Promise<WalletClie
   const privy = getPrivyClient();
   
   try {
-    // Get the user's embedded wallet
     const user = await privy.getUser(userId);
     const embeddedWallet = user.wallet?.address;
-    
+
     if (!embeddedWallet) {
       console.log(`No embedded wallet found for user ${userId}`);
       return null;
     }
 
-    // Create wallet client with the user's wallet
     const walletClient = createWalletClient({
       account: embeddedWallet as Address,
       chain: getBaseChain(),
@@ -48,7 +46,7 @@ export async function createUserWalletClient(userId: string): Promise<WalletClie
 
     return walletClient;
   } catch (error) {
-    console.error('Error creating wallet client:', error);
+    console.error('Error creating wallet client for user:', error);
     return null;
   }
 }
@@ -80,8 +78,14 @@ export async function getUserWalletAddress(userId: string): Promise<Address | nu
     const user = await privy.getUser(userId);
     const embeddedWallet = user.wallet?.address;
     return embeddedWallet as Address | null;
-  } catch (error) {
-    console.error('Error getting wallet address:', error);
+  } catch (error: any) {
+    const status = error?.status ?? error?.response?.status;
+    if (status === 404 || error?.type === 'api_error') {
+      console.warn(`Privy user not found for ${userId}; wallet address lookup skipped.`);
+      return null;
+    }
+
+    console.error(`Error getting wallet address for user ${userId}:`, error);
     return null;
   }
 }
