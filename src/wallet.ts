@@ -1,9 +1,45 @@
 import { PrivyClient } from '@privy-io/server-auth';
 import { createWalletClient, http, type WalletClient, type Address, type Chain } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { PRIVY_APP_ID, PRIVY_APP_SECRET, BASE_RPC_URL, DEMO_MODE } from './env.js';
 
 let privyClient: PrivyClient | null = null;
+
+const DEMO_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
+
+// ─── Persistent wallet registry ─────────────────────────────────────────────
+// Our app user id is the iMessage/Spectrum sender id. Privy keys users by their
+// own DID (did:privy:...), so calling privy.getUser(appUserId) can never find a
+// wallet. We persist the bridge between the two here so a connected wallet is
+// retrievable across sessions.
+const DATA_DIR = join(process.cwd(), '.moni-data');
+const WALLET_FILE = join(DATA_DIR, 'wallets.json');
+
+export interface WalletRecord {
+  privyUserId?: string;
+  walletAddress?: string;
+}
+
+function ensureDataDir(): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadWallets(): Record<string, WalletRecord> {
+  ensureDataDir();
+  if (!existsSync(WALLET_FILE)) return {};
+  try {
+    return JSON.parse(readFileSync(WALLET_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveWallets(store: Record<string, WalletRecord>): void {
+  ensureDataDir();
+  writeFileSync(WALLET_FILE, JSON.stringify(store, null, 2));
+}
 
 export function getPrivyClient(): PrivyClient {
   if (!privyClient) {
@@ -27,30 +63,17 @@ export async function createUserWalletClient(userId: string): Promise<WalletClie
     return null;
   }
 
-  const privy = getPrivyClient();
-  
-  try {
-    // Get the user's embedded wallet
-    const user = await privy.getUser(userId);
-    const embeddedWallet = user.wallet?.address;
-    
-    if (!embeddedWallet) {
-      console.log(`No embedded wallet found for user ${userId}`);
-      return null;
-    }
-
-    // Create wallet client with the user's wallet
-    const walletClient = createWalletClient({
-      account: embeddedWallet as Address,
-      chain: getBaseChain(),
-      transport: http(BASE_RPC_URL),
-    });
-
-    return walletClient;
-  } catch (error) {
-    console.error('Error creating wallet client:', error);
+  const walletAddress = await getUserWalletAddress(userId);
+  if (!walletAddress) {
+    console.log(`No embedded wallet found for user ${userId}`);
     return null;
   }
+
+  return createWalletClient({
+    account: walletAddress,
+    chain: getBaseChain(),
+    transport: http(BASE_RPC_URL),
+  });
 }
 
 // Create a wallet client from a private key (for demo/testing)
@@ -70,20 +93,47 @@ export async function getUserWalletClient(userId: string): Promise<WalletClient 
 // Get user's wallet address
 export async function getUserWalletAddress(userId: string): Promise<Address | null> {
   if (DEMO_MODE === 'true') {
-    // Return a demo address
-    return '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
+    return DEMO_ADDRESS;
   }
 
-  const privy = getPrivyClient();
-  
-  try {
-    const user = await privy.getUser(userId);
-    const embeddedWallet = user.wallet?.address;
-    return embeddedWallet as Address | null;
-  } catch (error) {
-    console.error('Error getting wallet address:', error);
-    return null;
+  const wallets = loadWallets();
+  const record = wallets[userId];
+
+  // Fast path: we already know this user's wallet address.
+  if (record?.walletAddress) {
+    return record.walletAddress as Address;
   }
+
+  // Slow path: we know their Privy user id — resolve the wallet from Privy and
+  // cache it so we don't hit Privy on every lookup.
+  if (record?.privyUserId) {
+    try {
+      const user = await getPrivyClient().getUser(record.privyUserId);
+      const embeddedWallet = user.wallet?.address;
+      if (embeddedWallet) {
+        record.walletAddress = embeddedWallet;
+        wallets[userId] = record;
+        saveWallets(wallets);
+        return embeddedWallet as Address;
+      }
+    } catch (error) {
+      console.error('Error resolving wallet from Privy:', error);
+    }
+  }
+
+  return null;
+}
+
+// Persist the bridge between our app user id and their Privy identity/wallet.
+// Call this once the user completes Privy auth (client-side) so the server can
+// resolve their wallet on later turns.
+export async function registerWallet(
+  userId: string,
+  opts: { privyUserId?: string; walletAddress?: string }
+): Promise<void> {
+  const wallets = loadWallets();
+  wallets[userId] = { ...(wallets[userId] || {}), ...opts };
+  saveWallets(wallets);
 }
 
 // Link a wallet to a user (for wallet connection flow)
@@ -93,13 +143,8 @@ export async function linkWallet(userId: string, walletAddress: Address): Promis
     return true;
   }
 
-  const privy = getPrivyClient();
-  
   try {
-    // This would typically be done via Privy's client-side SDK
-    // Server-side, we can associate the wallet with the user
-    // Note: linkWallet may not exist on server auth, use client SDK instead
-    console.log('Wallet linking should be done client-side via Privy SDK');
+    await registerWallet(userId, { walletAddress });
     return true;
   } catch (error) {
     console.error('Error linking wallet:', error);
@@ -117,6 +162,6 @@ export async function getDemoBalance(tokenSymbol: string): Promise<bigint> {
     USDC: 5000000000n,            // 5000 USDC (6 decimals)
     WETH: 2000000000000000000n,   // 2 WETH (18 decimals)
   };
-  
+
   return demoBalances[tokenSymbol] || 0n;
 }

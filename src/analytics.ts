@@ -14,10 +14,9 @@ export interface PortfolioAnalytics {
 
 export async function analyzePortfolio(userId: string): Promise<PortfolioAnalytics> {
   const memory = await getTradingMemory(userId);
-  const walletAddress = memory.preferences?.preferredTokens 
-    ? '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' // demo address
-    : '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4';
-  
+  const { getUserWalletAddress } = await import('./wallet.js');
+  const walletAddress = (await getUserWalletAddress(userId)) || '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4';
+
   const portfolio = await getPortfolio(walletAddress as any);
   
   if (portfolio.length === 0) {

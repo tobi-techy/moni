@@ -9,7 +9,9 @@ export const BASE_SEPOLIA_RPC = 'https://sepolia.base.org';
 // Type for chain ID
 export type ChainId = 8453 | 84532;
 
-// B20 Token Contract Addresses (Mainnet)
+// B20 Token Contract Addresses (Mainnet) — Coinbase Tokenized Stocks on Base.
+// These are the official Coinbase B20 contracts (8-decimal ERC-20s). Verified
+// on-chain against mainnet.base.org (decimals() = 8 for each).
 export const B20_TOKENS = {
   AAPL: '0xb200000000000000000000C2e324d24d7eEcd1fb',
   NVDA: '0xb20000000000000000000078ee7ce2fE4908108C',
@@ -24,7 +26,6 @@ export const B20_TOKENS = {
   CRCL: '0xB20000000000000000000019f6E7C675b73C2e4D',
   SNDK: '0xb200000000000000000000397293Cb8cda9a10c5',
   SPCX: '0xb2000000000000000000007b9fcbd005511aCBd5',
-  SPX: '0xb2000000000000000000008f0d3e8A9B1C2d4e5F6',
 } as const;
 
 export type B20TokenSymbol = keyof typeof B20_TOKENS;
@@ -43,7 +44,6 @@ export const CHAINLINK_PRICE_FEEDS = {
   NVDA: '0x04689a41629776563E6822F76f2e57D148d28513',
   SNDK: '0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA',
   SPCX: '0x6A634B235903C4ad6376892180d6fF8612e3Fa68',
-  SPX: '0x9876543210fedcba9876543210fedcba987654',
   TSLA: '0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4',
 } as const;
 
