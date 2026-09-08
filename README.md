@@ -5,11 +5,14 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 ## Features
 
 - 📱 **iMessage Native**: Trade via text messages in the Messages app
-- 🤖 **Agentic Assistant**: Cencori-powered agent with memory, learning, and autonomous strategies
+- 🤖 **Agentic Assistant**: Cencori-powered agent (claude-sonnet-4.5) with tool calling, memory, and autonomous strategies
+- 🔔 **Proactive Monitoring**: Moni initiates conversations - price alerts, stop-loss triggers, daily portfolio digest
 - 💼 **Portfolio Management**: View holdings, track P&L, real-time prices
-- 🔄 **Automated Strategies**: DCA, price alerts, stop-loss, take-profit
+- 🔄 **Automated Strategies**: DCA auto-execution, price alerts, stop-loss, take-profit, rebalancing
+- 💱 **Real Trade Execution**: 1inch DEX aggregation + Privy wallets with quote TTL and slippage guards
 - 🔐 **Embedded Wallets**: Privy-powered wallet abstraction (no seed phrases)
 - ⚡ **Base Native**: Direct integration with B20 tokenized stocks (AAPL, NVDA, MSFT, etc.)
+- 🐳 **Deployable**: Docker image, health check endpoint, AtlasFlow-ready
 - 🎯 **Builder Quest Compliant**: Non-US users only, demo mode for safe submission
 
 ## Quick Start
@@ -57,10 +60,15 @@ npm run dev
 # Build
 npm run build
 
-# Deploy to your server (Docker, Railway, Fly.io, etc.)
+# Or use the Docker image
+docker build -t moni .
+docker run -p 3000:3000 --env-file .env moni
+
 # Configure Spectrum iMessage lines in Photon dashboard
 npm start
 ```
+
+The server exposes `GET /health` for uptime checks.
 
 ## Configuration
 
@@ -102,6 +110,8 @@ You can also chat naturally:
 - "Alert me if TSLA drops below $200"
 - "Rebalance my portfolio to 40% AAPL, 30% NVDA, 30% MSFT"
 
+Moni can also message you first (price alerts, stop-loss hits, daily digest) thanks to the proactive monitor.
+
 ## Architecture
 
 ```
@@ -110,10 +120,12 @@ iMessage User
 Spectrum Agent Server (Node.js/Bun)
     ├── Privy Wallet Adapter (embedded wallet)
     ├── Cencori Agent Core (LLM + tool calling + memory)
+    ├── Proactive Monitor (price alerts, DCA auto-exec, digest)
     ├── Base RPC Client (mainnet)
     │   ├── B20 Token Contracts (AAPLc, NVDAc, etc.)
     │   ├── Chainlink Price Feeds (onchain oracle)
     │   └── 1inch/Aerodrome DEX Aggregator (swaps)
+    ├── Health Server (GET /health)
     └── Local Memory Store (.moni-data JSON persistence)
 ```
 
@@ -136,7 +148,7 @@ Spectrum Agent Server (Node.js/Bun)
 
 ## Builder Quest Submission
 
-This project is designed for the Base Builder Quest (deadline: Sep 9, 2026):
+This project is designed for the Base Builder Quest (deadline: Sep 9, 2026, 11:59pm US Eastern ≈ Sep 10, 4:59am WAT):
 
 1. **Run in demo mode**: `DEMO_MODE=true` (default) - all trades simulated
 2. **Record Loom demo** showing:
