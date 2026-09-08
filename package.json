@@ -9,7 +9,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
-    "demo": "tsx demo.ts"
+    "demo": "tsx demo.ts",
+    "smoke": "tsx scripts/smoke-test.ts",
+    "live": "tsx scripts/live-check.ts"
   },
   "keywords": [
     "base",

@@ -4,14 +4,13 @@ import { imessage, terminal } from 'spectrum-ts/providers';
 import { typing } from 'spectrum-ts';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
-import { handleConversation, ensureWalletConnected } from './conversation.js';
-import { startProactiveMonitoring } from './proactive.js';
+import { startProactiveMonitoring, triggerProactiveCheck, sendDailySummary } from './proactive.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
-import { sendAgentMessage, getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
+import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
@@ -361,12 +360,26 @@ async function handleSell(space: any, userId: string, args: string[]) {
   );
 }
 
+// Handle hidden demo trigger: force a proactive check + digest so the
+// "Moni texts you first" moment is reproducible for demos/recordings.
+async function handleDemoProactive(space: any, userId: string) {
+  await space.send('📡 Running monitoring cycle...');
+  const triggered = await triggerProactiveCheck(userId);
+  for (const message of triggered) {
+    await space.send(message);
+  }
+  await sendDailySummary(userId, async (_, message) => {
+    await space.send(message);
+  });
+}
+
 // Handle confirm
 async function handleConfirm(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.state !== 'awaiting_confirmation' || !session.pendingTrade) {
-    await space.send('❌ No pending trade to confirm.');
+    // Agent-created pending quote (demo or LLM-managed) — let the agent resolve it
+    await handleNaturalLanguage(space, userId, 'confirm');
     return;
   }
 
@@ -404,7 +417,8 @@ async function handleCancel(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.state !== 'awaiting_confirmation') {
-    await space.send('❌ No pending trade to cancel.');
+    // Agent-created pending quote — let the agent clear it
+    await handleNaturalLanguage(space, userId, 'cancel');
     return;
   }
 
@@ -609,31 +623,27 @@ async function handleHistory(space: any, userId: string, args: string[]) {
 async function handleHelp(space: any) {
   await space.send(
     `🤖 **Moni - Your iMessage Trading Agent**\n\n` +
+    `**Just chat naturally** — e.g. "What's my portfolio worth?", "Buy $500 of AAPL", "How risky am I?", "Set a stop-loss on NVDA at $800". The agent handles it.\n\n` +
     `**Portfolio & Prices**\n` +
     `• \`/portfolio\` - View your holdings\n` +
     `• \`/price <token>\` - Check token price\n` +
     `• \`/watchlist\` - View watchlist prices\n` +
     `• \`/analytics\` - Portfolio analytics & diversification\n` +
-    `• \`/analytics changes\` - 24h price changes for watchlist\n` +
     `• \`/history\` - Transaction history\n\n` +
     `**Trading**\n` +
     `• \`/buy <amount> <token> [with <token>]\` - Buy tokens\n` +
     `  Example: \`/buy 100 USDC AAPL\`\n` +
     `• \`/sell <amount> <token> [for <token>]\` - Sell tokens\n` +
-    `  Example: \`/sell 10 AAPL USDC\`\n` +
     `• \`/confirm\` / \`/cancel\` - Confirm or cancel pending trade\n\n` +
     `**Automation**\n` +
     `• \`/dca create <amount> <token> <frequency>\` - Dollar cost average\n` +
-    `• \`/dca list\` - List DCA strategies\n` +
     `• \`/alert create <token> <above|below> <price>\` - Price alerts\n` +
     `• \`/stoploss create <token> <stop> <target> <amount>\` - Stop-loss/Take-profit\n` +
     `• \`/rebalance create <sym:pct> ...\` - Portfolio rebalancing\n` +
     `• \`/sentiment\` - Market sentiment for watchlist\n\n` +
     `**Wallet**\n` +
     `• \`/connect\` - Connect your wallet\n` +
-    `• \`/wallet\` - Show wallet address\n\n` +
-    `**Agent**\n` +
-    `• Just chat naturally! Ask me anything about trading, markets, or your portfolio.`
+    `• \`/wallet\` - Show wallet address\n`
   );
 }
 
@@ -673,24 +683,44 @@ async function handleConnect(space: any, userId: string) {
   }
 }
 
-// Handle natural language via Letta agent
+// Natural language handling via the Moni agent
 async function handleNaturalLanguage(space: any, userId: string, message: string) {
-  await space.send('🤔 Thinking...');
-  
+  const session = getSession(userId);
+  const firstContact = await isFirstContact(userId);
+
+  if (firstContact) {
+    await space.send(buildWelcomeMessage(session.authenticated && !!session.walletAddress));
+  } else {
+    await space.send('🤔 Thinking...');
+  }
+
   try {
-    const response = await sendAgentMessage(userId, message);
+    const response = await sendAgentMessage(userId, message, {
+      walletConnected: !!(session.authenticated && session.walletAddress),
+      isFirstContact: firstContact,
+    });
     await space.send(response);
   } catch (error) {
-    const lettaConflict = error instanceof Error && /409 Conflict/.test(error.message);
-    const waitingForApproval = error instanceof Error && /waiting for approval/.test(error.message);
-
     console.error('Agent error:', error);
-    if (lettaConflict || waitingForApproval) {
-      await space.send('⏳ My agent loop is waiting on a pending tool approval. I’ll continue as soon as that clears.');
-      return;
-    }
     await space.send('❌ Sorry, I had trouble processing that. Try a command or ask again.');
   }
+}
+
+// First-time welcome — kept short, no slash-command pressure
+function buildWelcomeMessage(walletConnected: boolean): string {
+  let message =
+    '👋 Hey, I\'m Moni — your on-chain portfolio manager for tokenized stocks, right here in iMessage.\n\n' +
+    'No apps, no commands — just tell me what you want. A few things you can ask:\n\n' +
+    '• "What\'s my portfolio worth?"\n' +
+    '• "Buy $500 of AAPL with USDC"\n' +
+    '• "How risky is my portfolio?"\n';
+
+  if (!walletConnected) {
+    message += '\nFirst though, I\'ll need your wallet connected to see your holdings. Send /connect and I\'ll set you up.\n';
+  }
+
+  message += '\nWhat\'s on your mind?';
+  return message;
 }
 
 // Main message handler
@@ -701,6 +731,11 @@ async function handleMessage(space: any, userId: string, text: string) {
   console.log('📩 Message received:', JSON.stringify({ userId, text: trimmed }));
 
   // Handle commands
+  if (lower === '/demo' || lower === '/demo alert') {
+    await handleDemoProactive(space, userId);
+    return;
+  }
+
   if (lower.startsWith('/portfolio') || lower.startsWith('/holdings') || lower.startsWith('/balance')) {
     await handlePortfolio(space, userId);
     return;
@@ -792,7 +827,7 @@ async function handleMessage(space: any, userId: string, text: string) {
     return;
   }
 
-  // Default: natural language processing via Letta
+  // Default: natural language processing via the Moni agent
   await handleNaturalLanguage(space, userId, text);
 }
 

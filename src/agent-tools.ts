@@ -205,7 +205,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     const quoteRemainingMs = pendingQuote.expiresAt ? pendingQuote.expiresAt - now : -1;
 
     if (quoteRemainingMs < 0) {
-      delete (memory as any).pendingQuote;
+      (memory as any).pendingQuote = undefined;
       await setTradingMemory(userId, memory as any);
       return { success: false, error: 'Quote expired. Please request a new quote before trading.' };
     }
@@ -230,7 +230,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
 
     const freshQuote = await getSwapQuote(fromToken, toToken, parsedFromAmount, pendingQuote.slippage || 1.0);
     if (!freshQuote) {
-      delete (memory as any).pendingQuote;
+      (memory as any).pendingQuote = undefined;
       await setTradingMemory(userId, memory as any);
       return { success: false, error: 'Could not refresh swap quote before execution. Try again.' };
     }
@@ -245,7 +245,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     const slippageBps = originalReceiveUnits > 0 ? ((originalReceiveUnits - refreshedReceiveUnits) / originalReceiveUnits) * 10_000 : 0;
 
     if (slippageBps > 250) {
-      delete (memory as any).pendingQuote;
+      (memory as any).pendingQuote = undefined;
       await setTradingMemory(userId, memory as any);
       return {
         success: false,
@@ -272,8 +272,9 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       };
 
       await addTransaction(userId, tx);
-      delete (memory as any).pendingQuote;
-      await setTradingMemory(userId, memory as any);
+      const freshMemory = await getTradingMemory(userId);
+      (freshMemory as any).pendingQuote = undefined;
+      await setTradingMemory(userId, freshMemory as any);
 
       return {
         success: true,
@@ -300,7 +301,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     );
 
     if (!swapTx) {
-      delete (memory as any).pendingQuote;
+      (memory as any).pendingQuote = undefined;
       await setTradingMemory(userId, memory as any);
       return { success: false, error: 'Could not get swap transaction data from 1inch.' };
     }
@@ -341,8 +342,9 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     };
 
     await addTransaction(userId, tx);
-    delete (memory as any).pendingQuote;
-    await setTradingMemory(userId, memory as any);
+    const freshMemory = await getTradingMemory(userId);
+    (freshMemory as any).pendingQuote = undefined;
+    await setTradingMemory(userId, freshMemory as any);
 
     if (tx.status === 'failed') {
       return {

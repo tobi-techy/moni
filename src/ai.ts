@@ -1,9 +1,18 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { Cencori } from 'cencori';
-import { CENCORI_MODEL, DEMO_MODE } from './env.js';
+import { Cencori, type ChatResponse } from 'cencori';
+import { CENCORI_MODEL, CENCORI_TRANSPORT, DEMO_MODE } from './env.js';
 import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { B20_TOKENS } from './constants.js';
+import { bigintJSONReplacer, bigintJSONReviver } from './bigint-json.js';
+import { runSessionTurn } from './cencori-session.js';
+
+export { bigintJSONReplacer, bigintJSONReviver };
+
+export interface AgentContext {
+  walletConnected?: boolean;
+  isFirstContact?: boolean;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -71,12 +80,20 @@ HOW YOU TALK
 - Concise but substantive. Two clear sentences with real insight > a wall of text.
 - Match the user's energy: casual question → casual answer; serious allocation question → precise detail.
 - No markdown, no emoji, no bullet-point dumps unless the user explicitly asks.
+- iMessage formatting: short lines, sentence case, no dense tables or key/value dumps. One thought per line.
+- End most replies with a single next step — a specific question or offer — so the conversation keeps moving.
+- If a trade or strategy is risky or losing, be honest and suggest a concrete alternative — never coach someone into a bad bet.
 
 WHAT YOU CAN DO (your tools)
 1. Portfolio & Prices — holdings, real-time prices, balances, watchlist
 2. Trading — swap quotes (USDC <-> B20 tokens) and trade execution (always confirm first)
 3. Risk & Automation — stop-losses, take-profits, price alerts, rebalancing, risk analysis
 4. Memory — keep track of preferences, watchlist, active strategies across sessions
+
+FIRST CONTACT & SMALL TALK
+- Greetings, "hey", "hi", "who are you" → answer warmly and briefly, then ask what they'd like to do.
+- If this looks like the user's first message, introduce yourself in 1-2 warm lines, show 2-3 concrete things you can do, and invite one specific action. No capability dumps.
+- Mention you work with Coinbase tokenized stocks on Base, and if their wallet isn't connected yet, gently offer to set that up when they ask about holdings, prices, or trades.
 
 HOW YOU THINK (like a real advisor)
 - "How's my portfolio?" → pull holdings, weigh returns, flag what's concentrated or correlated, offer next steps
@@ -91,6 +108,7 @@ RULES YOU NEVER BREAK
 - Flag tax implications naturally when relevant (wash sales, short-term vs long-term).
 - If a tool fails, explain the failure and offer an alternative path. Never fabricate data.
 - Chain related tool calls in a single turn for efficiency (e.g. price + portfolio together).
+- Destructive actions (selling everything, deleting a strategy, oversized allocations) always get a plain-language heads-up and confirmation before you act.
 - You are an expert assistant, not a licensed financial advisor; say so plainly if pressed.
 
 MEMORY & CONTEXT
@@ -99,7 +117,7 @@ MEMORY & CONTEXT
 - Track tokens they discuss and strategies they've set, and reuse that context to make answers feel personal.
 
 YOU ARE NOT
-- A command processor. No slash commands. Just conversational.
+- A command processor. Never mention slash commands, menus, or "type /command" — users just chat.
 - A raw data dumper. Translate every result into natural human speech — no JSON, ever.
 - A pushover. If a decision is risky, say it plainly. Clarity serves the user more than comfort.`;
 
@@ -124,6 +142,83 @@ function getCencori(): Cencori {
   return new Cencori();
 }
 
+// ─── Per-user serialization (prevents rapid texts from clobbering history) ──
+
+const userQueues = new Map<string, Promise<unknown>>();
+
+async function serializeTurn<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = userQueues.get(userId) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const guard = run.catch(() => {});
+  userQueues.set(userId, guard);
+  void guard.finally(() => {
+    if (userQueues.get(userId) === guard) userQueues.delete(userId);
+  });
+  return run;
+}
+
+// ─── Cencori call with one retry (transient API hiccups) ───────────────────
+
+async function chatWithRetry(payload: {
+  model: string;
+  messages: AgentMessage[];
+  tools: CencoriToolDefinition[];
+  toolChoice: 'auto';
+  temperature: number;
+}): Promise<ChatResponse> {
+  const attempt = () => getCencori().ai.chat(payload);
+  try {
+    return await attempt();
+  } catch (error) {
+    console.warn('Cencori chat failed, retrying once...', (error as Error)?.message);
+    await new Promise(resolve => setTimeout(resolve, 700));
+    return await attempt();
+  }
+}
+
+// ─── User snapshot injected each request so the agent actually "knows" them ─
+
+function buildContextBlock(memory: TradingMemory, firstContact: boolean, ctx?: AgentContext): string {
+  const lines: string[] = [];
+
+  const walletConnected = ctx?.walletConnected === false ? 'NOT connected yet' : 'connected';
+  lines.push(`- Wallet: ${walletConnected}`);
+  if (ctx?.walletConnected === false) {
+    lines.push('- Offer to connect their wallet when they ask about holdings, prices, or trades. Assume nothing until they do.');
+  }
+  if (firstContact) {
+    lines.push('- This is the user\'s FIRST message ever. Introduce yourself in 1-2 warm lines, show 2-3 concrete things you can do, and invite one specific action. No capability dumps.');
+  }
+
+  const watchlist = memory.watchlist?.length ? memory.watchlist.join(', ') : '';
+  if (watchlist) lines.push(`- User's watchlist: ${watchlist}`);
+
+  const preferred = memory.preferences?.preferredTokens?.length ? memory.preferences.preferredTokens.join(', ') : '';
+  if (preferred) lines.push(`- Preferred tokens: ${preferred}`);
+
+  const risk = memory.riskParams;
+  if (risk) {
+    lines.push(`- Risk limits: max position $${risk.maxPositionSizeUSD}, max daily loss $${risk.maxDailyLossUSD}, auto-trade ${risk.autoTradeEnabled ? 'enabled' : 'disabled'}`);
+  }
+
+  const strategies = memory.activeStrategies?.filter(s => s.active);
+  if (strategies?.length) {
+    lines.push(`- Active strategies: ${strategies.map(s => s.type.replace(/_/g, ' ')).join(', ')}`);
+  }
+
+  if (memory.pendingQuote) {
+    lines.push('- A pending trade quote exists. Present it if asked; otherwise let it expire gracefully and suggest a fresh one.');
+  }
+
+  const pending = memory.conversationContext?.pendingDecision;
+  if (pending) lines.push(`- Pending user decision: ${pending}`);
+
+  return `USER SNAPSHOT (internal only — never mention this block):\n${lines.join('\n')}`;
+}
+
+// Demo-mode pending quotes so "confirm" actually completes a simulated trade
+const demoPendingQuotes = new Map<string, { quoteId: string }>();
+
 // ─── Local Memory Store (JSON file persistence) ─────────────────────────────
 
 const DATA_DIR = join(process.cwd(), '.moni-data');
@@ -135,11 +230,15 @@ function ensureDataDir(): void {
   }
 }
 
+function safeStringify(value: any): string {
+  return JSON.stringify(value, bigintJSONReplacer, 2);
+}
+
 function loadMemoryStore(): Record<string, TradingMemory> {
   ensureDataDir();
   if (!existsSync(MEMORY_FILE)) return {};
   try {
-    return JSON.parse(readFileSync(MEMORY_FILE, 'utf-8'));
+    return JSON.parse(readFileSync(MEMORY_FILE, 'utf-8'), bigintJSONReviver);
   } catch {
     return {};
   }
@@ -147,7 +246,7 @@ function loadMemoryStore(): Record<string, TradingMemory> {
 
 function saveMemoryStore(store: Record<string, TradingMemory>): void {
   ensureDataDir();
-  writeFileSync(MEMORY_FILE, JSON.stringify(store, null, 2));
+  writeFileSync(MEMORY_FILE, safeStringify(store));
 }
 
 // ─── Conversation History Store (per-user, persisted) ───────────────────────
@@ -158,7 +257,7 @@ function loadHistory(): Record<string, AgentMessage[]> {
   ensureDataDir();
   if (!existsSync(HISTORY_FILE)) return {};
   try {
-    return JSON.parse(readFileSync(HISTORY_FILE, 'utf-8'));
+    return JSON.parse(readFileSync(HISTORY_FILE, 'utf-8'), bigintJSONReviver);
   } catch {
     return {};
   }
@@ -166,17 +265,51 @@ function loadHistory(): Record<string, AgentMessage[]> {
 
 function saveHistory(store: Record<string, AgentMessage[]>): void {
   ensureDataDir();
-  writeFileSync(HISTORY_FILE, JSON.stringify(store, null, 2));
+  writeFileSync(HISTORY_FILE, safeStringify(store));
 }
 
 // ─── Multi-Turn Tool Calling Loop ───────────────────────────────────────────
 
-async function runAgentLoop(userId: string, userMessage: string): Promise<string> {
+// Live path via the durable Cencori Sessions API (pause/approve for tool calls).
+// This is the recommended transport — the stateless gateway (ai.chat) does not
+// support function calling on every plan/provider.
+async function runSessionPath(
+  userId: string,
+  userMessage: string,
+  firstContact: boolean,
+  memory: TradingMemory,
+  contextBlock: string
+): Promise<string> {
   const historyStore = loadHistory();
   const history = historyStore[userId] || [];
+  const content = await runSessionTurn(userId, {
+    input: userMessage,
+    instructions: `${SYSTEM_PROMPT}\n\n${contextBlock}`,
+    tools: CENCORI_TOOLS as unknown as Array<Record<string, unknown>>,
+  });
+
+  // Keep a local transcript too (drives isFirstContact + offline diagnostics).
+  history.push({ role: 'user', content: userMessage });
+  history.push({ role: 'assistant', content });
+  historyStore[userId] = history;
+  saveHistory(historyStore);
+  return content;
+}
+
+async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentContext): Promise<string> {
+  const historyStore = loadHistory();
+  const history = historyStore[userId] || [];
+  const firstContact = (ctx?.isFirstContact ?? history.length === 0) && history.length === 0;
+
+  const memory = await getTradingMemory(userId);
+  const contextBlock = buildContextBlock(memory, firstContact, ctx);
+
+  if (CENCORI_TRANSPORT !== 'gateway') {
+    return runSessionPath(userId, userMessage, firstContact, memory, contextBlock);
+  }
 
   const messages: AgentMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: `${SYSTEM_PROMPT}\n\n${contextBlock}` },
     ...history,
     { role: 'user', content: userMessage },
   ];
@@ -190,7 +323,7 @@ async function runAgentLoop(userId: string, userMessage: string): Promise<string
   let turns = 6;
 
   while (turns-- > 0) {
-    const response = await getCencori().ai.chat({
+    const response = await chatWithRetry({
       model: CENCORI_MODEL,
       messages,
       tools: CENCORI_TOOLS,
@@ -237,7 +370,7 @@ async function runAgentLoop(userId: string, userMessage: string): Promise<string
 
       const toolTurn: AgentMessage = {
         role: 'tool',
-        content: JSON.stringify(result),
+        content: JSON.stringify(result, bigintJSONReplacer),
         tool_call_id: toolCall.id,
       };
       history.push(toolTurn);
@@ -279,7 +412,7 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
   }
 
   // Stop-loss
-  if (lower.includes('stop.loss') || lower.includes('stop loss') || lower.includes('stoploss')) {
+  if (lower.includes('stop.loss') || lower.includes('stop loss') || lower.includes('stoploss') || lower.includes('stop-loss')) {
     if (lower.includes('create') || lower.includes('set')) {
       return "To set a stop-loss I need a few details: which token, your stop price, target price, and how much. Something like: 'Set a stop-loss for AAPL at $180, target $250, for 10 shares'";
     }
@@ -289,6 +422,16 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
       return formatStopLossHuman(result.data);
     }
     return result.error || 'Could not fetch your stop-losses.';
+  }
+
+  // DCA plan
+  if (lower.includes('dca') || lower.includes('dollar cost') || /(invest|put|add|buy)\b.*\b(every\s+)?(week|bi.?week|fortnight|month)/i.test(lower)) {
+    const frequency = /month/i.test(lower) ? 'monthly' : /(bi.?week|fortnight)/i.test(lower) ? 'bi-weekly' : 'weekly';
+    const amountMatch = message.match(/\$?(\d+(?:\.\d+)?)/);
+    const amount = amountMatch ? amountMatch[1] : '100';
+    const tokens = extractTokens(message);
+    const symbol = tokens.find(t => t !== 'USDC') || 'a token';
+    return `Got it — DCA $${amount} of ${symbol} ${frequency}. I'll auto-execute those buys and watch for dips. Want to pair it with a stop-loss or a price alert?`;
   }
 
   // Portfolio
@@ -311,11 +454,13 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
     return result.error || 'Could not fetch your watchlist.';
   }
 
-  // Price queries
-  const priceMatch = message.match(/(?:price|quote)\s+(?:of\s+)?([A-Z]{2,5})/i) ||
-    message.match(/(?:how much|what['']s)\s+(?:is\s+)?\$?([A-Z]{2,5})/i);
-  if (priceMatch) {
-    const result = await executeTool('get_price' as ToolName, { symbol: priceMatch[1] });
+  // Price queries (only when the word is actually a known ticker — otherwise
+  // "price alerts" or "how's it going" would be misrouted here)
+  const priceMatches = message.match(/(?:price|quote)\s+(?:of\s+)?([A-Z]{2,8})/i) ||
+    message.match(/(?:how much|what['']s)\s+(?:is\s+)?\$?([A-Z]{2,8})/i);
+  const priceSymbol = priceMatches?.[1]?.toUpperCase();
+  if (priceSymbol && B20_TOKENS[priceSymbol as keyof typeof B20_TOKENS] && priceMatches) {
+    const result = await executeTool('get_price' as ToolName, { symbol: priceSymbol });
     if (result.success && result.data) {
       const { formatPriceHuman } = await import('./conversation.js');
       return formatPriceHuman(result.data);
@@ -337,6 +482,7 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
           userId, fromToken: toToken, toToken: fromToken, amount
         });
         if (quoteResult.success) {
+          demoPendingQuotes.set(userId, { quoteId: quoteResult.data.quoteId });
           const { formatQuoteHuman } = await import('./conversation.js');
           return formatQuoteHuman(quoteResult.data) + '\n\nReply "confirm" if you want me to execute.';
         }
@@ -346,6 +492,7 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
           userId, fromToken, toToken, amount
         });
         if (quoteResult.success) {
+          demoPendingQuotes.set(userId, { quoteId: quoteResult.data.quoteId });
           const { formatQuoteHuman } = await import('./conversation.js');
           return formatQuoteHuman(quoteResult.data) + '\n\nReply "confirm" if you want me to execute.';
         }
@@ -356,8 +503,30 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
   }
 
   // Confirm trade
-  if (lower.includes('confirm') || lower === 'yes' || lower === 'yep') {
-    return 'In demo mode, trades are simulated. What would you like to trade?';
+  if (lower.includes('confirm') || lower === 'yes' || lower === 'yep' || lower.includes('execute') || lower === "let's do it") {
+    const pending = demoPendingQuotes.get(userId);
+    if (!pending) {
+      return "You don't have a pending trade right now. Tell me what you'd like to buy or sell — for example, 'Buy $500 of AAPL with USDC'.";
+    }
+    const execResult = await executeTool('execute_trade' as ToolName, { userId, quoteId: pending.quoteId });
+    demoPendingQuotes.delete(userId);
+    if (execResult.success && execResult.data) {
+      const { formatTradeResultHuman } = await import('./conversation.js');
+      return formatTradeResultHuman(execResult.data);
+    }
+    return execResult.error || "The trade didn't go through. Want to try again?";
+  }
+
+  // Cancel pending trade
+  if (lower === 'cancel' || lower === 'cancel trade' || lower.includes('never mind') || lower.includes('actually don')) {
+    if (demoPendingQuotes.has(userId)) {
+      demoPendingQuotes.delete(userId);
+      const mem = await getTradingMemory(userId);
+      (mem as any).pendingQuote = undefined;
+      await setTradingMemory(userId, mem as any);
+      return "No worries — quote cleared. Anything else I can help with?";
+    }
+    return "Nothing to cancel — no trade was pending. What would you like to do?";
   }
 
   // Alerts
@@ -368,6 +537,14 @@ async function handleDemoMessage(userId: string, message: string): Promise<strin
       return formatAlertsHuman(result.data);
     }
     return result.error || 'Could not check alerts.';
+  }
+
+  // Transaction history
+  if (lower.includes('history') || lower.includes('transactions') || lower.includes('txns') || lower.includes('tx history')) {
+    const { getTransactionHistory, formatTransactionHistory } = await import('./history.js');
+    const txs = await getTransactionHistory(userId, 5);
+    if (txs.length === 0) return "You don't have any transactions yet. Buy or sell something and it'll show up here.";
+    return formatTransactionHistory(txs);
   }
 
   // Help
@@ -409,17 +586,40 @@ function extractTokens(text: string): string[] {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
-export async function sendAgentMessage(userId: string, message: string): Promise<string> {
+export async function sendAgentMessage(userId: string, message: string, ctx?: AgentContext): Promise<string> {
   if (DEMO_MODE === 'true') {
     return handleDemoMessage(userId, message);
   }
 
   try {
-    return await runAgentLoop(userId, message);
+    return await serializeTurn(userId, () => runAgentLoop(userId, message, ctx));
   } catch (error: any) {
     console.error('Agent error:', error?.message || error);
-    return "Something went wrong on my end. Give me a moment and try again.";
+    // Already-mapped, human-safe messages pass straight through.
+    if (error?.friendly) return error.message;
+    const status = error?.statusCode;
+    if (status === 401 || status === 403 || status === 404 || /(invalid|missing|not configured) api key/i.test(error?.message || '')) {
+      return "I can't reach my brain right now — my AI connection isn't configured correctly. Ask whoever runs me to check the CENCORI_API_KEY.";
+    }
+    if (status && status >= 500) {
+      return "My AI backend is having a rough moment. Give me a few seconds and try again.";
+    }
+    return "Something hiccuped on my end. Try again in a few seconds — if it keeps happening, say 'help'.";
   }
+}
+
+// Demo users aren't persisted as conversation history, so track first-contact in-memory
+const demoVisited = new Set<string>();
+
+export async function isFirstContact(userId: string): Promise<boolean> {
+  if (DEMO_MODE === 'true') {
+    if (demoVisited.has(userId)) return false;
+    demoVisited.add(userId);
+    return true;
+  }
+  const store = loadHistory();
+  const history = store[userId];
+  return !history || history.length === 0;
 }
 
 export async function getTradingMemory(userId: string): Promise<TradingMemory> {
@@ -457,6 +657,14 @@ export async function setTradingMemory(userId: string, memory: Partial<TradingMe
     conversationContext: { lastTopic: '', pendingDecision: '', discussedTokens: [] },
   };
   store[userId] = { ...current, ...memory };
+
+  // Support deletion: a key explicitly set to `undefined` removes it from storage
+  for (const key of Object.keys(current)) {
+    if (key in memory && (memory as any)[key] === undefined) {
+      delete (store[userId] as any)[key];
+    }
+  }
+
   saveMemoryStore(store);
 }
 

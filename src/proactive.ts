@@ -234,7 +234,7 @@ function getDcaIntervalMs(frequency: string): number {
 }
 
 // Send daily portfolio summary
-async function sendDailySummary(
+export async function sendDailySummary(
   userId: string,
   sendMessage: (userId: string, message: string) => Promise<void>
 ): Promise<void> {
