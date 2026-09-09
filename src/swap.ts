@@ -64,13 +64,25 @@ export async function getSwapQuote(
     });
 
     if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      if (response.status === 400) {
+        // B20 tokenized stocks aren't listed on 1inch, so any USDC<->B20 pair
+        // 400s here. Log the failure clearly so operators can tell — at a
+        // glance — that this is missing liquidity, not a flaky API.
+        console.warn(
+          `[1inch] 400 quote ${fromToken} -> ${toToken} on chain ${chainId}: ` +
+          `token pair has no 1inch liquidity (B20 stocks aren't tradable there). ` +
+          `Body: ${body.slice(0, 200)}`
+        );
+      } else {
+        console.error(`[1inch] ${response.status} on quote ${fromToken} -> ${toToken}: ${body.slice(0, 200)}`);
+      }
       throw new Error(`1inch API error: ${response.status}`);
     }
 
     // 1inch v6.1 returns the destination amount as `dstAmount` and the gas
     // estimate as a numeric `gas`. Normalize into the consumer-facing shape so
-    // callers can rely on `fromAmount`/`toAmount`/`estimatedGas` (with a
-    // tolerance for older `toAmount`-style responses).
+    // callers can rely on `fromAmount`/`toAmount`/`estimatedGas`.
     const data = await response.json() as any;
     return {
       fromToken,
@@ -137,6 +149,16 @@ export async function getSwapTransaction(
     });
 
     if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      if (response.status === 400) {
+        console.warn(
+          `[1inch] 400 swap ${fromToken} -> ${toToken} on chain ${chainId}: ` +
+          `token pair has no 1inch liquidity (B20 stocks aren't tradable there). ` +
+          `Body: ${body.slice(0, 200)}`
+        );
+      } else {
+        console.error(`[1inch] ${response.status} on swap ${fromToken} -> ${toToken}: ${body.slice(0, 200)}`);
+      }
       throw new Error(`1inch API error: ${response.status}`);
     }
 

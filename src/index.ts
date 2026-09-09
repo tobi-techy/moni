@@ -318,7 +318,11 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 6).toString());
   
   if (!quote) {
-    await space.send('❌ Could not get quote. Please try again.');
+    await space.send(
+      `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
+      `tokenized stocks don't have 1inch liquidity yet. Check prices or your portfolio meanwhile, ` +
+      `or run Moni in demo mode to see the full trade flow.`
+    );
     return;
   }
 
@@ -387,7 +391,11 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
 
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());  
   if (!quote) {
-    await space.send('❌ Could not get quote.');
+    await space.send(
+      `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
+      `tokenized stocks don't have 1inch liquidity yet. Check prices or your portfolio meanwhile, ` +
+      `or run Moni in demo mode to see the full trade flow.`
+    );
     return;
   }
 

@@ -126,6 +126,10 @@ function retryable(raw: string): boolean {
   return /rate limit|circuit is open|internal_error|internal error|overloaded/i.test(raw || '');
 }
 
+// Fixed delay before an intra-attempt retry (the outer attempt loop uses a
+// growing backoff, this one just lets a rate-limit window clear).
+const TRANSIENT_RETRY_DELAY_MS = 700;
+
 // ─── Main turn loop ────────────────────────────────────────────────────────
 
 export async function runSessionTurn(
@@ -173,85 +177,116 @@ export async function runSessionTurn(
       pause_on_tool_calls: true,
     });
 
-  // One retry for transient provider hiccups.
-  let stream: ReadableStream<Uint8Array> | null;
-  try {
-    stream = await submit();
-  } catch (error: any) {
-    const raw = error?.message || String(error);
-    if (!retryable(raw)) throw new FriendlyAgentError(friendlyMessage(raw));
-    await new Promise(r => setTimeout(r, 700));
-    stream = await submit();
-  }
-  if (!stream) throw new FriendlyAgentError("My AI connection didn't return a response stream.");
+  // A single attempt of the SSE turn. Throws a FriendlyAgentError tagged
+  // `retryable` when the failure is a transient provider hiccup AND no tool has
+  // executed yet — retrying a turn that already ran a trade would double it.
+  const runAttempt = async (): Promise<string> => {
+    let stream: ReadableStream<Uint8Array> | null;
+    try {
+      stream = await submit();
+    } catch (error: any) {
+      const raw = error?.message || String(error);
+      if (!retryable(raw)) throw new FriendlyAgentError(friendlyMessage(raw));
+      await new Promise(r => setTimeout(r, TRANSIENT_RETRY_DELAY_MS));
+      stream = await submit();
+    }
+    if (!stream) throw new FriendlyAgentError("My AI connection didn't return a response stream.");
 
-  let output = '';
-  let toolCalls = 0;
+    let output = '';
+    let toolCalls = 0;
 
-  for (;;) {
-    let paused = false;
-    let terminated = false;
+    for (;;) {
+      let paused = false;
+      let terminated = false;
 
-    for await (const ev of iterateSSE(stream)) {
-      switch (ev.event) {
-        case 'output_text.delta':
-          if (typeof ev.data?.delta === 'string') output += ev.data.delta;
-          break;
+      for await (const ev of iterateSSE(stream)) {
+        switch (ev.event) {
+          case 'output_text.delta':
+            if (typeof ev.data?.delta === 'string') output += ev.data.delta;
+            break;
 
-        case 'turn.paused': {
-          const p = ev.data ?? {};
-          const actionId = p.action_id;
-          const tool = p.tool;
-          if (!actionId || !tool) {
-            throw new FriendlyAgentError(
-              "My AI asked for a tool in an unrecognised format — ask whoever runs me to check the agent transport."
-            );
+          case 'turn.paused': {
+            const p = ev.data ?? {};
+            const actionId = p.action_id;
+            const tool = p.tool;
+            if (!actionId || !tool) {
+              throw new FriendlyAgentError(
+                "My AI asked for a tool in an unrecognised format — ask whoever runs me to check the agent transport."
+              );
+            }
+            const args = normalizeToolArgs(p.arguments, tool);
+            const result = await execute(tool, args);
+            toolCalls++;
+            stream = await sessions.approveStream(sessionId, {
+              action_id: actionId,
+              tool_results: [{ action_id: actionId, output: JSON.stringify(result, bigintJSONReplacer) }],
+            });
+            if (!stream) throw new FriendlyAgentError("My AI connection dropped mid-turn — try again.");
+            paused = true;
+            break;
           }
-          const args = normalizeToolArgs(p.arguments, tool);
-          const result = await execute(tool, args);
-          toolCalls++;
-          stream = await sessions.approveStream(sessionId, {
-            action_id: actionId,
-            tool_results: [{ action_id: actionId, output: JSON.stringify(result, bigintJSONReplacer) }],
-          });
-          if (!stream) throw new FriendlyAgentError("My AI connection dropped mid-turn — try again.");
-          paused = true;
-          break;
-        }
 
-        case 'turn.completed': {
-          const raw = ev.data?.output;
-          const text =
-            typeof raw === 'string'
-              ? raw
-              : raw?.text ?? raw?.content ?? raw?.message?.content ?? raw?.output_text ?? '';
-          if (text && !output.includes(String(text))) output += text;
-          terminated = true;
-          break;
-        }
-
-        case 'turn.failed': {
-          const raw = ev.data?.output?.error ?? ev.data?.error ?? 'unknown error';
-          const msg = String(raw || '');
-          if (retryable(msg) && toolCalls === 0) {
-            await new Promise(r => setTimeout(r, 700));
-            throw new FriendlyAgentError(`My AI provider hiccuped — please try again in a moment. ${msg.slice(0, 120)}`);
+          case 'turn.completed': {
+            const raw = ev.data?.output;
+            const text =
+              typeof raw === 'string'
+                ? raw
+                : raw?.text ?? raw?.content ?? raw?.message?.content ?? raw?.output_text ?? '';
+            if (text && !output.includes(String(text))) output += text;
+            terminated = true;
+            break;
           }
-          throw new FriendlyAgentError(friendlyMessage(msg));
+
+          case 'turn.failed': {
+            const raw = ev.data?.output?.error ?? ev.data?.error ?? 'unknown error';
+            const msg = String(raw || '');
+            if (retryable(msg) && toolCalls === 0) {
+              await new Promise(r => setTimeout(r, TRANSIENT_RETRY_DELAY_MS));
+              const err = new FriendlyAgentError(
+                `My AI provider hiccuped — please try again in a moment. ${msg.slice(0, 120)}`
+              ) as any;
+              err.retryable = true;
+              throw err;
+            }
+            throw new FriendlyAgentError(friendlyMessage(msg));
+          }
         }
+        if (paused) break;
       }
-      if (paused) break;
-    }
 
-    if (terminated) {
-      const trimmed = output.trim();
-      if (!trimmed) throw new FriendlyAgentError("I didn't manage to answer — try again in a few seconds.");
-      return trimmed;
+      if (terminated) {
+        const trimmed = output.trim();
+        if (!trimmed) throw new FriendlyAgentError("I didn't manage to answer — try again in a few seconds.");
+        return trimmed;
+      }
+      if (!paused) {
+        throw new FriendlyAgentError("My AI connection ended the turn unexpectedly — try again.");
+      }
     }
-    if (!paused) {
-      throw new FriendlyAgentError("My AI connection ended the turn unexpectedly — try again.");
+  };
+
+  // Transient provider hiccups (rate limits, circuit open, overload) get a few
+  // bounded retries with backoff before surfacing a friendly error. Turning a
+  // tool call into a retry is intentionally prevented (see runAttempt).
+  const MAX_TURN_ATTEMPTS = 3;
+  const TURN_RETRY_BACKOFF_MS = [1200, 3500];
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < MAX_TURN_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, TURN_RETRY_BACKOFF_MS[attempt - 1] ?? 2000));
+    }
+    try {
+      return await runAttempt();
+    } catch (error: any) {
+      if (error?.retryable && attempt < MAX_TURN_ATTEMPTS - 1) {
+        lastError = error;
+        continue;
+      }
+      throw error;
     }
   }
+  throw lastError ?? new FriendlyAgentError("My AI connection didn't return a response stream.");
 }
 
 // Exposed for offline testing / diagnostics

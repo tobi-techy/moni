@@ -1,3 +1,5 @@
+import { parseAbi } from 'viem';
+
 // Base Network Configuration
 export const BASE_CHAIN_ID = 8453;
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -51,7 +53,7 @@ export const CHAINLINK_PRICE_FEEDS = {
 export const B20_REGISTRY = '0x3f3E8cf41cdd3b1D118c16471aB0113DfDDd5CaD';
 
 // Common ERC20 ABI (minimal for B20)
-export const ERC20_ABI = [
+export const ERC20_ABI_STRINGS = [
   'function name() view returns (string)',
   'function symbol() view returns (string)',
   'function decimals() view returns (uint8)',
@@ -64,9 +66,11 @@ export const ERC20_ABI = [
   'event Approval(address indexed owner, address indexed spender, uint256 value)',
 ] as const;
 
+export const ERC20_ABI = parseAbi(ERC20_ABI_STRINGS);
+
 // B20 Specific ABI (extends ERC20)
-export const B20_ABI = [
-  ...ERC20_ABI,
+export const B20_ABI = parseAbi([
+  ...ERC20_ABI_STRINGS,
   'function multiplier() view returns (uint256)',
   'function scaledBalanceOf(address) view returns (uint256)',
   'function toScaledBalance(uint256 raw) view returns (uint256)',
@@ -75,14 +79,14 @@ export const B20_ABI = [
   'function contractURI() view returns (string)',
   'event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier)',
   'event Announcement(uint256 indexed id, string description, string uri)',
-] as const;
+] as const);
 
 // Chainlink Aggregator V3 ABI (minimal)
-export const CHAINLINK_AGGREGATOR_ABI = [
+export const CHAINLINK_AGGREGATOR_ABI = parseAbi([
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
   'function decimals() view returns (uint8)',
   'function description() view returns (string)',
-] as const;
+] as const);
 
 // WAD Precision (1e18)
 export const WAD_PRECISION = 10n ** 18n;
