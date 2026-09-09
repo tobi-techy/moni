@@ -192,43 +192,6 @@
     font-size:calc(20.6 * var(--h)); font-weight:500; letter-spacing:.01em;
   }
   .pill-cta span{ transform:translateY(1u); }
-  .ghost{
-    position:absolute; left:calc(74.9 * var(--u) + 220.6 * var(--h));
-    top:calc(230.5 * var(--u) + 279.5 * var(--h));
-    font-size:calc(20.6 * var(--h)); font-weight:500;
-    letter-spacing:calc(.12 * var(--h)); color:#fff;
-  }
-
-  /* ── Partner strip ──────────────────────────────────────────────────── */
-  .logos{
-    position:absolute;
-    width:calc(741 * var(--u)); left:50%;
-    transform:translateX(calc(-50% + 20 * var(--u)));
-    color:var(--strip);
-    font-family:'IpsumMark','Manrope',sans-serif;
-  }
-  .lg{ position:absolute; }
-  .lg svg.mark{ position:absolute; left:0; top:0; display:block; }
-  .lg .word{
-    position:absolute; font-weight:700; color:inherit;
-    white-space:nowrap;
-  }
-  .lg1{ left:calc(-0.5 * var(--u)); top:calc(994.7 * var(--u)); }
-  .lg1 svg.mark{ width:calc(30.5 * var(--u)); height:calc(31 * var(--u)); }
-  .lg1 .word{ left:calc(37 * var(--u)); top:calc(5.6 * var(--u)); font-size:calc(18.1 * var(--u)); }
-
-  .lg2{ left:calc(206.5 * var(--u)); top:calc(995.7 * var(--u)); }
-  .lg2 svg.mark{ width:calc(24.5 * var(--u)); height:calc(30 * var(--u)); }
-  .lg2 .word{ left:calc(31 * var(--u)); top:calc(7.3 * var(--u)); font-size:calc(18.5 * var(--u)); }
-  .lg2 .dot{ display:inline-block; width:.09em; height:.09em; border-radius:50%; background:currentColor; vertical-align:.62em; margin-left:.06em; }
-
-  .lg3{ left:calc(416.5 * var(--u)); top:calc(996.7 * var(--u)); }
-  .lg3 svg.mark{ width:calc(28.5 * var(--u)); height:calc(28 * var(--u)); }
-  .lg3 .word{ left:calc(35 * var(--u)); top:calc(7.3 * var(--u)); font-size:calc(16.15 * var(--u)); }
-
-  .lg4{ left:calc(620.5 * var(--u)); top:calc(998.7 * var(--u)); }
-  .lg4 svg.mark{ width:calc(28.5 * var(--u)); height:calc(25.5 * var(--u)); }
-  .lg4 .word{ left:calc(37 * var(--u)); top:calc(8.3 * var(--u)); font-size:calc(15.3 * var(--u)); }
 
   /* ── Entrance animations ────────────────────────────────────────────── */
   @media (prefers-reduced-motion: no-preference){
@@ -237,14 +200,12 @@
       from{ opacity:0; transform:translate(-50%, calc(-50% + 14 * var(--u))); }
       to  { opacity:1; transform:translate(-50%, -50%); }
     }
-    @keyframes fade{ from{ opacity:0; } }
     .brand{ animation:rise .8s cubic-bezier(.22,1,.36,1) both; }
     .links{ animation:riseNav .8s cubic-bezier(.22,1,.36,1) both; }
     .pill-nav{ animation:rise .8s cubic-bezier(.22,1,.36,1) both; }
     .headline{ animation:rise .9s cubic-bezier(.22,1,.36,1) .06s both; }
     .sub{ animation:rise .9s cubic-bezier(.22,1,.36,1) .14s both; }
-    .pill-cta, .ghost{ animation:rise .9s cubic-bezier(.22,1,.36,1) .22s both; }
-    .lg{ animation:fade 1.1s cubic-bezier(.22,1,.36,1) .34s both; }
+    .pill-cta{ animation:rise .9s cubic-bezier(.22,1,.36,1) .22s both; }
   }
   @media (prefers-reduced-motion: reduce){
     *,*::before,*::after{
@@ -287,22 +248,6 @@
       display:flex; align-items:flex-start; gap:calc(20 * var(--m));
     }
     .pill-cta{ position:relative; width:auto; padding:0 calc(26 * var(--m)); height:calc(50 * var(--m)); border-radius:999px; font-size:clamp(15px, calc(16.5 * var(--m)), 18px); }
-    .ghost{ position:relative; left:auto; top:auto; font-size:clamp(15px, calc(16.5 * var(--m)), 18px); align-self:center; }
-
-    .logos{
-      position:relative; width:100%; left:auto;
-      transform:none; color:var(--strip);
-      display:grid; grid-template-columns:1fr 1fr; gap:calc(22 * var(--m));
-      padding:calc(40 * var(--m)) calc(24px + env(safe-area-inset-left)) calc(28px + env(safe-area-inset-bottom));
-    }
-    .lg{ position:relative; left:auto !important; top:auto !important; display:flex; align-items:center; }
-    .lg svg.mark{ position:relative; flex:none; }
-    .lg .word{ position:relative; left:auto !important; top:auto !important; }
-    .lg1 svg.mark, .lg2 svg.mark, .lg3 svg.mark, .lg4 svg.mark{ width:26px; height:26px; }
-    .lg1 .word{ font-size:15px; margin-left:10px; }
-    .lg2 .word{ font-size:15px; margin-left:10px; }
-    .lg3 .word{ font-size:14px; margin-left:10px; }
-    .lg4 .word{ font-size:13px; margin-left:10px; }
 
     .topbar{ position:absolute; }
     .brand{ left:calc(22px); top:calc(20px); width:24px; height:37px; }
@@ -321,17 +266,9 @@
           linear-gradient(to right, rgba(5,5,5,.84) 0%, rgba(5,5,5,.60) 42%, rgba(5,5,5,.16) 78%, rgba(5,5,5,.06) 100%),
           linear-gradient(to bottom, rgba(5,5,5,.66) 0%, rgba(5,5,5,.28) 24%, rgba(5,5,5,.30) 56%, rgba(5,5,5,.78) 82%, rgba(5,5,5,.96) 94%, #050505 100%);
       }
-      .logos{ grid-template-columns:repeat(4,1fr); gap:calc(28 * var(--m)); }
     }
   }
-
-  /* IpsumMark fallback: bold geometric sans carries the wordmarks */
-  @font-face{
-    font-family:'IpsumMark';
-    src:local('Arial Rounded MT Bold');
-    font-weight:700;
-    font-display:swap;
-  }
+}
 </style>
 </head>
 <body>
@@ -388,7 +325,6 @@
       </ul>
       <div class="menu-foot">
         <a class="pill pill-cta" href="#start"><span>Start Trading</span></a>
-        <a class="ghost" href="#architecture">View Architecture</a>
       </div>
     </div>
   </nav>
@@ -404,50 +340,8 @@
     </p>
     <div class="actions">
       <a class="pill pill-cta" href="#start"><span>Start Trading</span></a>
-      <a class="ghost" href="#architecture">View Architecture</a>
     </div>
   </main>
-
-  <div class="logos">
-    <div class="lg lg1">
-      <svg class="mark" viewBox="0 0 30 31" aria-hidden="true">
-        <mask id="m1">
-          <rect width="30" height="31" rx="6" fill="#fff"/>
-          <circle cx="19.5" cy="10.5" r="5.1" fill="#000"/>
-        </mask>
-        <rect x="1" y="1.2" width="28" height="28.6" rx="6" fill="none" stroke="currentColor" stroke-width="2.4" mask="url(#m1)"/>
-        <circle cx="19.5" cy="10.5" r="5.1" fill="currentColor"/>
-      </svg>
-      <span class="word">logoipsum</span>
-    </div>
-    <div class="lg lg2">
-      <svg class="mark" viewBox="0 0 25 30" aria-hidden="true">
-        <rect x="2" y="1" width="6" height="28" rx="3" fill="currentColor"/>
-        <mask id="m2">
-          <rect width="25" height="30" fill="#fff"/>
-          <path d="M15.5 3a11 11 0 0 1 0 24z" fill="#000"/>
-        </mask>
-        <circle cx="15.5" cy="15" r="12" fill="currentColor" mask="url(#m2)"/>
-      </svg>
-      <span class="word">logoipsum<span class="dot"></span></span>
-    </div>
-    <div class="lg lg3">
-      <svg class="mark" viewBox="0 0 28 28" aria-hidden="true">
-        <circle cx="14" cy="14" r="12.35" fill="none" stroke="currentColor" stroke-width="3.1"/>
-        <path d="M14 2.5c3.2 2.6 3.2 4.4 0 7-2.9 2.4-3.6 4.5-2.1 7.1" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round"/>
-        <path d="M14 25.5c-3.2-2.6-3.2-4.4 0-7 2.9-2.4 3.6-4.5 2.1-7.1" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round"/>
-      </svg>
-      <span class="word">logoipsum</span>
-    </div>
-    <div class="lg lg4">
-      <svg class="mark" viewBox="0 0 28 25.5" aria-hidden="true">
-        <path d="M1 20.5c6-12 10-16 13-16s7 4 13 16v4H1z" fill="currentColor"/>
-        <path d="M5.5 9c4-3.4 8-3.4 12 0" fill="none" stroke="currentColor" stroke-width="3.05" stroke-linecap="round"/>
-        <path d="M3 13.5c5-4 10-4 15 0" fill="none" stroke="currentColor" stroke-width="3.05" stroke-linecap="round"/>
-      </svg>
-      <span class="word">logoipsum</span>
-    </div>
-  </div>
 
 </div>
 
