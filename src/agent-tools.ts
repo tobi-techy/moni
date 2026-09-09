@@ -7,7 +7,7 @@ import { checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction, getTransactionHistory } from './history.js';
 import { DEMO_MODE } from './env.js';
-import { ERC20_ABI } from './constants.js';
+import { ERC20_ABI, B20_DECIMALS } from './constants.js';
 import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, encodeFunctionData } from 'viem';
 
 // Tool result types
@@ -103,7 +103,7 @@ export async function get_portfolio(userId: string): Promise<ToolResult> {
       return {
         symbol: h.symbol,
         name: h.name,
-        shares: formatBalance(h.scaledBalance, 18),
+        shares: formatBalance(h.scaledBalance, B20_DECIMALS),
         valueUSD: formatUSD(h.valueUSD),
         price: Number(h.price) / 10 ** 8,
         multiplier: Number(h.multiplier) / 10 ** 18,
@@ -197,7 +197,7 @@ export async function get_swap_quote(
     }
 
     // Determine decimals for amount parsing
-    const fromDecimals = fromTokenUpper === 'USDC' ? 6 : 18;
+    const fromDecimals = fromTokenUpper === 'USDC' ? 6 : B20_DECIMALS;
     const parsedAmount = parseAmount(amount, fromDecimals).toString();
 
     const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parsedAmount);
@@ -205,11 +205,11 @@ export async function get_swap_quote(
     if (!quote) {
       return {
         success: false,
-        error: "Quote unavailable — tokenized stocks don't have on-chain swap liquidity yet. Try a price check or portfolio query instead."
+        error: "Quote unavailable — this pair isn't tradeable on 1inch yet (COIN/INTC/CRCL aren't listed). Try a price check or portfolio query instead."
       };
     }
 
-    const toDecimals = toTokenUpper === 'USDC' ? 6 : 18;
+    const toDecimals = toTokenUpper === 'USDC' ? 6 : B20_DECIMALS;
     const toAmountFormatted = formatAmount(BigInt(quote.toAmount), toDecimals);
     const fromAmountFormatted = formatAmount(BigInt(quote.fromAmount), fromDecimals);
 
@@ -280,8 +280,8 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     }
 
     const { fromTokenSymbol, toTokenSymbol, fromAmount, toAmount, fromToken, toToken } = pendingQuote;
-    const fromDecimals = fromTokenSymbol === 'USDC' ? 6 : 18;
-    const toDecimals = toTokenSymbol === 'USDC' ? 6 : 18;
+    const fromDecimals = fromTokenSymbol === 'USDC' ? 6 : B20_DECIMALS;
+    const toDecimals = toTokenSymbol === 'USDC' ? 6 : B20_DECIMALS;
     const fromAmountBigInt = BigInt(fromAmount);
     const toAmountBigInt = BigInt(toAmount);
 
@@ -322,8 +322,8 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
         toToken: toTokenSymbol,
         fromAmount: BigInt(fromAmount),
         toAmount: BigInt(toAmount),
-        fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : 18),
-        toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : 18),
+        fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : B20_DECIMALS),
+        toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : B20_DECIMALS),
         priceUSD: Number(toAmount) / Number(fromAmount),
         txHash: `0x${Math.random().toString(16).slice(2).padStart(62, '0')}`,
         status: 'confirmed',
@@ -470,7 +470,7 @@ export async function check_balance(userId: string, token: string): Promise<Tool
         success: true,
         data: {
           symbol: upperToken,
-          balance: formatBalance(holding.scaledBalance, 18),
+          balance: formatBalance(holding.scaledBalance, B20_DECIMALS),
           balanceRaw: holding.scaledBalance,
           valueUSD: formatUSD(holding.valueUSD)
         }

@@ -6,6 +6,7 @@ import {
   B20_ABI, 
   CHAINLINK_AGGREGATOR_ABI, 
   WAD_PRECISION,
+  B20_DECIMALS,
   B20TokenSymbol 
 } from './constants.js';
 
@@ -57,7 +58,7 @@ export async function getTokenMetadata(symbol: B20TokenSymbol): Promise<TokenMet
     return {
       name: `${symbol} Tokenized Stock`,
       symbol,
-      decimals: 18,
+      decimals: B20_DECIMALS,
       address: B20_TOKENS[symbol],
     };
   }
@@ -92,11 +93,11 @@ export async function getTokenMetadata(symbol: B20TokenSymbol): Promise<TokenMet
 // Get raw balance (B20 token units)
 export async function getRawBalance(symbol: B20TokenSymbol, walletAddress: Address): Promise<bigint> {
   if (DEMO_MODE === 'true') {
-    // Return demo balance
+    // Return demo balance (B20_DECIMALS units to mirror the live contract — 1 token = 1e8)
     const demoBalances: Record<string, bigint> = {
-      AAPL: 100000000000000000000n,
-      NVDA: 50000000000000000000n,
-      MSFT: 200000000000000000000n,
+      AAPL: 100n * 10n ** 8n,
+      NVDA: 50n * 10n ** 8n,
+      MSFT: 200n * 10n ** 8n,
     };
     return demoBalances[symbol] || 0n;
   }
@@ -121,10 +122,12 @@ export async function getRawBalance(symbol: B20TokenSymbol, walletAddress: Addre
 // Get scaled balance (accounting for multiplier/dividends/splits)
 export async function getScaledBalance(symbol: B20TokenSymbol, walletAddress: Address): Promise<bigint> {
   if (DEMO_MODE === 'true') {
+    // Demo scaled balances mirror the live ERC-20 units (B20_DECIMALS = 8),
+    // with a demo 1.02x multiplier applied so scaled > raw is visible.
     const demoBalances: Record<string, bigint> = {
-      AAPL: 102000000000000000000n, // 102 AAPL (with 2% dividend multiplier)
-      NVDA: 51000000000000000000n,  // 51 NVDA
-      MSFT: 204000000000000000000n, // 204 MSFT
+      AAPL: 102n * 10n ** 8n, // 102 AAPL (with 2% dividend multiplier)
+      NVDA: 51n * 10n ** 8n,  // 51 NVDA
+      MSFT: 204n * 10n ** 8n, // 204 MSFT
     };
     return demoBalances[symbol] || 0n;
   }
@@ -245,8 +248,8 @@ async function fetchTokenPrice(symbol: B20TokenSymbol): Promise<TokenPrice | nul
     // Most symbols have a live Chainlink feed on Base; when one is missing or
     // the read fails (rate limit/revert) we fall back to the real underlying
     // market price (Yahoo, keyless), then to a static reference price if the
-    // live source is unreachable. (1inch was dropped — B20 token addresses
-    // aren't supported by the 1inch price API, so it only produced 400s.)
+    // live source is unreachable. (1inch price API also works for listed B20
+    // tokens now, but the Chainlink feed is the onchain source of truth.)
     const live = await getLiveMarketPrice(symbol);
     if (live) {
       return {
@@ -386,11 +389,11 @@ export async function getPortfolio(walletAddress: Address): Promise<Array<{
           getMultiplier(symbol),
         ]);
 
-        // Calculate USD value: (scaledBalance / 10^18) * (priceData.price / 10^8) * 10^8
-        // = scaledBalance * priceData.price / 10^18
-        // Result is in 8-decimal format (matching Chainlink/formatUSD)
+        // Calculate USD value in 8-decimal units (matching Chainlink).
+        // scaledBalance is in B20_DECIMALS (8) units, price is in 8 decimals.
+        // (scaledBalance / 10^8) * (price / 10^8) * 10^8 = scaledBalance * price / 10^8
         const valueUSD = priceData
-          ? (scaledBalance * priceData.price) / 10n ** 18n
+          ? (scaledBalance * priceData.price) / 10n ** BigInt(B20_DECIMALS)
           : 0n;
 
         results[idx] = {

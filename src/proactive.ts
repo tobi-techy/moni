@@ -2,6 +2,7 @@ import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { checkStopLosses, checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress } from './wallet.js';
 import { getPortfolio, formatUSD, B20_TOKENS } from './base.js';
+import { B20_DECIMALS } from './constants.js';
 import { checkPriceAlerts } from './agent-tools.js';
 import { getSwapQuote, parseAmount, formatAmount } from './swap.js';
 import { addTransaction } from './history.js';
@@ -178,7 +179,7 @@ async function checkDcaStrategies(
         continue;
       }
 
-      const receivedAmount = formatAmount(BigInt(quote.toAmount), 18);
+      const receivedAmount = formatAmount(BigInt(quote.toAmount), B20_DECIMALS);
       const txHash = DEMO_MODE === 'true'
         ? `0xdca${Date.now().toString(16).padStart(58, '0')}`
         : undefined;

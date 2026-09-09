@@ -8,10 +8,15 @@ export const BASE_CHAIN_ID = 8453;
 export const BASE_MAINNET_RPC = 'https://mainnet.base.org';
 
 // B20 Token Contract Addresses (Mainnet) — Coinbase Tokenized Stocks on Base.
-// These are the official Coinbase B20 contracts (8-decimal ERC-20s), as listed
-// at docs.base.org (Tokenized Stocks on Base). AMZNc/COINc/INTCc were previously
-// the CHAINLINK FEED addresses (those actually live on a different contract).
+// These are the official Coinbase B20 contracts listed at docs.base.org
+// (Tokenized Stocks on Base). AMZNc/COINc/INTCc were previously the CHAINLINK
+// FEED addresses (those actually live on a different contract).
 // Verified on-chain against mainnet.base.org.
+//
+// B20 tokens are 8-decimal ERC-20s; the multiplier is WAD-scaled (1e18).
+// Confirmed on-chain: decimals() = 8, WAD_PRECISION() = 1e18 (multipler = 1.0
+// as of this check, i.e. no corporate action yet). 1inch lists the same
+// contracts at 8 decimals, so quotes line up with the ERC-20 units.
 export const B20_TOKENS = {
   AAPL: '0xb200000000000000000000C2e324d24d7eEcd1fb',
   NVDA: '0xb20000000000000000000078ee7ce2fE4908108C',
@@ -29,6 +34,10 @@ export const B20_TOKENS = {
 } as const;
 
 export type B20TokenSymbol = keyof typeof B20_TOKENS;
+
+// B20 ERC-20 token decimals. Verified on-chain (decimals() = 8) and used for
+// all live balance/value math. Demo mode separately mocks balances at 18.
+export const B20_DECIMALS = 8;
 
 // Chainlink Price Feed Addresses (Mainnet)
 export const CHAINLINK_PRICE_FEEDS = {
