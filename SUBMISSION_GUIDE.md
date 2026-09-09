@@ -8,8 +8,8 @@
 - [x] **Uses Coinbase Tokenized Stocks (B20) on Base** - Direct integration with AAPL, NVDA, MSFT, etc.
 - [x] **Innovative iMessage interface** - Native blue-bubble trading experience
 - [x] **Agentic capabilities** - Cencori-powered agent with memory, proactive alerts, DCA auto-execution, stop-loss, rebalancing
-- [x] **Real trade execution** - 1inch + Para MPC swap path (quote TTL, stale-quote and slippage guards), simulated in demo mode
-- [x] **Demo mode ready** - Safe for quest submission (no real funds at risk, no API keys needed)
+- [x] **Real trade execution** - 1inch + Para MPC swap path (quote TTL, stale-quote and slippage guards)
+- [x] **Live-only mode** - No simulated trades or fabricated data; every balance/price/trade is real on-chain
 - [x] **Non-US user compliant** - Quest requirement met
 
 **Deadline reminder:** submissions due **Sep 9, 2026, 11:59pm US Eastern** (≈ **Sep 10, 4:59am WAT**).
@@ -21,7 +21,7 @@
 Run these **the day you record** — every one is a hard gate. Do not record until all green.
 
 1. **`npm run lint`** — clean (exit 0).
-2. **`npm run smoke`** — `22/22 passed ... ready to record.` This deterministically exercises every demo flow offline: first-contact flag, welcome intro, portfolio, price, risk, watchlist, rebalance, stop-loss guidance, DCA, quote → cancel, quote → confirm → executed trade → history, alerts, small talk, fallback, proactive check + daily digest, and BigInt-safe persistence.
+2. **`npm run smoke`** — all green (exit 0). Exercises pure logic deterministically (amount parse/format round-trips, USD formatting, ERC-8021 builder-code attribution suffix, Para identifier namespacing, full B20 registry integrity with Chainlink feeds) and asserts the live-only invariants: with no keys, wallet resolution returns `null` — never a fabricated demo wallet. The conversational flows are verified live via `npm run live`.
 3. **Fresh CLI walkthrough** (mirrors the iMessage UX exactly):
    ```
    npm run dev
@@ -32,9 +32,8 @@ Run these **the day you record** — every one is a hard gate. Do not record unt
    - `Buy $50 of TSLA with USDC` → quote with ~TSLA amount
    - `confirm` → "Done. 50 USDC → 50 TSLA. Tx: …"
    - `Show my transaction history` → the TSLA buy listed
-   - `/demo` → "📡 Running monitoring cycle…" + 📊 Daily summary (this is the reproducible "Moni texts you first" moment)
    - `exit`
-4. **Live rehearsal (the "speaks like a human" gate)** — with a real `CENCORI_API_KEY` and `DEMO_MODE=false`:
+4. **Live rehearsal (the "speaks like a human" gate)** — with a real `CENCORI_API_KEY`:**
    ```
    npm run live
    ```
@@ -72,7 +71,7 @@ Show: iMessage (or demo CLI) conversation with Moni
 ### 4. Trading (45 seconds)
 - Say: "Buy $500 of AAPL with USDC"
 - Show quote with price, slippage, and gas estimate
-- Say "confirm" - Trade executes via 1inch (simulated in demo)
+- Say "confirm" - Trade executes via 1inch (real swap on Base)
 - "Trades route through 1inch DEX aggregation on Base with fresh-quote + slippage guards so you never execute on a stale price"
 - Show `/history` - transaction log
 
@@ -114,7 +113,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 3. **Conversational Financial Agent** - Cencori-powered (claude-sonnet-4.5) with tool calling and persistence
 4. **Proactive Monitoring** - Unsolicited price/portfolio alerts and daily digest
 5. **Automated Strategies** - DCA auto-execution, stop-loss/take-profit, rebalancing, price alerts
-6. **Real Trade Execution** - 1inch DEX aggregation + Para MPC wallets, with quote-lifetime and slippage guards (simulated in demo mode)
+6. **Real Trade Execution** - 1inch DEX aggregation + Para MPC wallets, with quote-lifetime and slippage guards
 7. **Natural Language Interface** - Just talk; the agent routes to wallet, pricing, swap, analytics, and automation tools
 
 ### Technical Stack
@@ -137,7 +136,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 
 ### Quest Compliance
 - ✅ Uses Coinbase Tokenized Stocks on Base (B20 standard)
-- ✅ Non-US users only (demo mode, no real KYC in demo)
+- ✅ Non-US users only (per Quest eligibility)
 - ✅ Demonstrates agentic economy primitives
 - ✅ Innovative interface (iMessage)
 - ✅ Built within quest timeline
@@ -156,30 +155,28 @@ Built for @buildonbase Builder Quest! #onchain #AIagents
 
 ---
 
-## Demo Mode Notes for Reviewers
+## Live Mode Notes for Reviewers
 
-The demo runs in **DEMO_MODE=true** which:
-- Simulates all trades (no real funds moved, no live Cencori calls needed)
-- Routes the demo agent through a keyword-based fallback (portfolio, quotes, help) with graceful degradation
-- Auto-connects a demo wallet
-- Shows all features without requiring API keys
+Moni has **no demo mode** — it is live-only:
+- Every balance, price, and trade reads from real on-chain data (Chainlink feeds, Base RPC, Para MPC wallets, 1inch aggregation)
+- The agent always routes through its live tool set (portfolio, quotes, execution, automation, memory) backed by the real APIs
+- No simulated trades or fabricated numbers, ever
 
 To run locally:
 ```bash
 git clone https://github.com/tobi-techy/moni.git
 cd moni
 npm install
-npm run demo  # Runs pre-recorded demo flow
-npm run dev   # Runs interactive CLI demo
+npm run smoke   # Deterministic unit smoke (no keys needed)
+npm run dev     # Interactive live CLI (needs .env keys)
 ```
 
 For production iMessage deployment:
 1. Create Photon/Spectrum account at app.photon.codes
 2. Configure iMessage lines
-3. Add PROJECT_ID, PROJECT_SECRET, PARA_API_KEY, CENCORI_API_KEY (optional), BASE_RPC_URL to .env
-4. Set DEMO_MODE=false
-5. Deploy to server (Docker, Railway, Fly.io, or AtlasFlow)
-6. Health check: GET /health
+3. Add PROJECT_ID, PROJECT_SECRET, PARA_API_KEY, CENCORI_API_KEY, BASE_RPC_URL to .env (all mandatory at startup)
+4. Deploy to server (Docker, Railway, Fly.io, or AtlasFlow)
+5. Health check: GET /health
 
 ---
 
@@ -192,7 +189,7 @@ For production iMessage deployment:
 | **Agentic Economy** | Cencori agent with memory, autonomous strategies, auto-executing DCA |
 | **User Experience** | Native iMessage, no app install, pure natural language |
 | **Technical Execution** | TypeScript, real 1inch+Para execution path, testable demo, Docker/AtlasFlow |
-| **Quest Compliance** | Non-US only, demo mode, deadline met |
+| **Quest Compliance** | Non-US only, deadline met |
 
 ---
 

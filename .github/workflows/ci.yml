@@ -27,10 +27,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Run demo (smoke test)
-        run: npm run demo
-        env:
-          DEMO_MODE: 'true'
+      - name: Run smoke test
+        run: npm run smoke
 
   docker:
     needs: lint-and-test
@@ -52,7 +50,7 @@ jobs:
 
       - name: Test Docker image
         run: |
-          docker run --rm -d -p 3000:3000 -e DEMO_MODE=true --name moni-test moni:latest
+          docker run --rm -d -p 3000:3000 --name moni-test moni:latest
           sleep 5
           curl -f http://localhost:3000/health
           docker stop moni-test

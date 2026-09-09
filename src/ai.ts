@@ -1,9 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Cencori, type ChatResponse } from 'cencori';
-import { CENCORI_MODEL, CENCORI_TRANSPORT, DEMO_MODE } from './env.js';
+import { CENCORI_MODEL, CENCORI_TRANSPORT } from './env.js';
 import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
-import { B20_TOKENS } from './constants.js';
 import { bigintJSONReplacer, bigintJSONReviver } from './bigint-json.js';
 import { runSessionTurn } from './cencori-session.js';
 import { sanitizeOutgoingText } from './text.js';
@@ -219,9 +218,6 @@ function buildContextBlock(memory: TradingMemory, firstContact: boolean, ctx?: A
   return `USER SNAPSHOT (internal only — never mention this block):\n${lines.join('\n')}`;
 }
 
-// Demo-mode pending quotes so "confirm" actually completes a simulated trade
-const demoPendingQuotes = new Map<string, { quoteId: string }>();
-
 // ─── Local Memory Store (JSON file persistence) ─────────────────────────────
 
 const DATA_DIR = join(process.cwd(), '.moni-data');
@@ -389,226 +385,9 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
   return fallback;
 }
 
-// ─── Demo Mode Handler ──────────────────────────────────────────────────────
-
-async function handleDemoMessage(userId: string, message: string): Promise<string> {
-  const { executeTool } = await import('./agent-tools.js');
-  const lower = message.toLowerCase();
-
-  // Wallet address request
-  if (lower.includes('wallet') && (lower.includes('address') || lower.includes('get') || lower.includes('my') || lower.includes('connect'))) {
-    const result = await executeTool('get_wallet_info' as ToolName, { userId });
-    if (result.success && result.data) {
-      return `Your wallet is all set. Address on Base: ${result.data.address}\n\nFund it with USDC on Base and you can start trading tokenized stocks. Want me to walk you through it?`;
-    }
-    return result.error || 'Could not get your wallet right now.';
-  }
-
-  // Greetings / small talk -> the intro style Moni uses on first contact
-  if (/^(hey|hi|hello|yo|sup|good (morning|afternoon|evening))\b/.test(lower)) {
-    return "Hey there! I'm Moni, your portfolio manager and market analyst for Coinbase tokenized stocks on Base.\n\nI can help you track prices, manage your portfolio, or even execute trades for tokens like AAPL, NVDA, or MSFT.\n\nWhat's on your mind today?";
-  }
-
-  // Risk analysis
-  if (lower.includes('risk') || lower.includes('analyze') || lower.includes('how risky')) {
-    const result = await executeTool('analyze_portfolio_risk' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatRiskAnalysisHuman } = await import('./conversation.js');
-      return formatRiskAnalysisHuman(result.data);
-    }
-    return result.error || 'Could not analyze risk right now.';
-  }
-
-  // Rebalance
-  if (lower.includes('rebalance')) {
-    const result = await executeTool('check_rebalance_needed' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatRebalanceHuman } = await import('./conversation.js');
-      return formatRebalanceHuman(result.data);
-    }
-    return result.error || 'Could not check rebalance.';
-  }
-
-  // Stop-loss
-  if (lower.includes('stop.loss') || lower.includes('stop loss') || lower.includes('stoploss') || lower.includes('stop-loss')) {
-    if (lower.includes('create') || lower.includes('set')) {
-      return "To set a stop-loss I need a few details: which token, your stop price, target price, and how much. Something like: 'Set a stop-loss for AAPL at $180, target $250, for 10 shares'";
-    }
-    const result = await executeTool('get_active_stop_losses' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatStopLossHuman } = await import('./conversation.js');
-      return formatStopLossHuman(result.data);
-    }
-    return result.error || 'Could not fetch your stop-losses.';
-  }
-
-  // DCA plan
-  if (lower.includes('dca') || lower.includes('dollar cost') || /(invest|put|add|buy)\b.*\b(every\s+)?(week|bi.?week|fortnight|month)/i.test(lower)) {
-    const frequency = /month/i.test(lower) ? 'monthly' : /(bi.?week|fortnight)/i.test(lower) ? 'bi-weekly' : 'weekly';
-    const amountMatch = message.match(/\$?(\d+(?:\.\d+)?)/);
-    const amount = amountMatch ? amountMatch[1] : '100';
-    const tokens = extractTokens(message);
-    const symbol = tokens.find(t => t !== 'USDC') || 'a token';
-    return `Got it — DCA $${amount} of ${symbol} ${frequency}. I'll auto-execute those buys and watch for dips. Want to pair it with a stop-loss or a price alert?`;
-  }
-
-  // Portfolio
-  if (lower.includes('portfolio') || lower.includes('holdings') || (lower.includes('balance') && !lower.includes('rebalance')) || lower.includes('worth')) {
-    const result = await executeTool('get_portfolio' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatPortfolioHuman } = await import('./conversation.js');
-      return formatPortfolioHuman(result.data);
-    }
-    return result.error || 'Could not fetch your portfolio.';
-  }
-
-  // Watchlist
-  if (lower.includes('watchlist')) {
-    const result = await executeTool('get_watchlist_prices' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatWatchlistHuman } = await import('./conversation.js');
-      return formatWatchlistHuman(result.data);
-    }
-    return result.error || 'Could not fetch your watchlist.';
-  }
-
-  // Price queries (only when the word is actually a known ticker — otherwise
-  // "price alerts" or "how's it going" would be misrouted here)
-  const priceMatches = message.match(/(?:price|quote)\s+(?:of\s+)?([A-Z]{2,8})/i) ||
-    message.match(/(?:how much|what['']s)\s+(?:is\s+)?\$?([A-Z]{2,8})/i);
-  const priceSymbol = priceMatches?.[1]?.toUpperCase();
-  if (priceSymbol && B20_TOKENS[priceSymbol as keyof typeof B20_TOKENS] && priceMatches) {
-    const result = await executeTool('get_price' as ToolName, { symbol: priceSymbol });
-    if (result.success && result.data) {
-      const { formatPriceHuman } = await import('./conversation.js');
-      return formatPriceHuman(result.data);
-    }
-    return result.error || 'Could not fetch that price.';
-  }
-
-  // Buy/sell/trade
-  if (lower.includes('buy') || lower.includes('sell') || lower.includes('trade')) {
-    const tokens = extractTokens(message);
-    if (tokens.length >= 2) {
-      const fromToken = tokens.find(t => t === 'USDC') || tokens[0];
-      const toToken = tokens.find(t => t !== 'USDC') || tokens[1];
-      const amountMatch = message.match(/\$?(\d+(?:\.\d+)?)/);
-      const amount = amountMatch ? amountMatch[1] : '100';
-
-      if (lower.includes('sell')) {
-        const quoteResult = await executeTool('get_swap_quote' as ToolName, {
-          userId, fromToken: toToken, toToken: fromToken, amount
-        });
-        if (quoteResult.success) {
-          demoPendingQuotes.set(userId, { quoteId: quoteResult.data.quoteId });
-          const { formatQuoteHuman } = await import('./conversation.js');
-          return formatQuoteHuman(quoteResult.data) + '\n\nReply "confirm" if you want me to execute.';
-        }
-        return quoteResult.error || 'Could not get a quote.';
-      } else {
-        const quoteResult = await executeTool('get_swap_quote' as ToolName, {
-          userId, fromToken, toToken, amount
-        });
-        if (quoteResult.success) {
-          demoPendingQuotes.set(userId, { quoteId: quoteResult.data.quoteId });
-          const { formatQuoteHuman } = await import('./conversation.js');
-          return formatQuoteHuman(quoteResult.data) + '\n\nReply "confirm" if you want me to execute.';
-        }
-        return quoteResult.error || 'Could not get a quote.';
-      }
-    }
-    return "I need to know what you're trading. Try something like: 'Buy $100 of AAPL with USDC' or 'Sell 10 NVDA for USDC'";
-  }
-
-  // Confirm trade
-  if (lower.includes('confirm') || lower === 'yes' || lower === 'yep' || lower.includes('execute') || lower === "let's do it") {
-    const pending = demoPendingQuotes.get(userId);
-    if (!pending) {
-      return "You don't have a pending trade right now. Tell me what you'd like to buy or sell — for example, 'Buy $500 of AAPL with USDC'.";
-    }
-    const execResult = await executeTool('execute_trade' as ToolName, { userId, quoteId: pending.quoteId });
-    demoPendingQuotes.delete(userId);
-    if (execResult.success && execResult.data) {
-      const { formatTradeResultHuman } = await import('./conversation.js');
-      return formatTradeResultHuman(execResult.data);
-    }
-    return execResult.error || "The trade didn't go through. Want to try again?";
-  }
-
-  // Cancel pending trade
-  if (lower === 'cancel' || lower === 'cancel trade' || lower.includes('never mind') || lower.includes('actually don')) {
-    if (demoPendingQuotes.has(userId)) {
-      demoPendingQuotes.delete(userId);
-      const mem = await getTradingMemory(userId);
-      (mem as any).pendingQuote = undefined;
-      await setTradingMemory(userId, mem as any);
-      return "No worries — quote cleared. Anything else I can help with?";
-    }
-    return "Nothing to cancel — no trade was pending. What would you like to do?";
-  }
-
-  // Alerts
-  if (lower.includes('alert')) {
-    const result = await executeTool('check_price_alerts' as ToolName, { userId });
-    if (result.success && result.data) {
-      const { formatAlertsHuman } = await import('./conversation.js');
-      return formatAlertsHuman(result.data);
-    }
-    return result.error || 'Could not check alerts.';
-  }
-
-  // Transaction history
-  if (lower.includes('history') || lower.includes('transactions') || lower.includes('txns') || lower.includes('tx history')) {
-    const { getTransactionHistory, formatTransactionHistory } = await import('./history.js');
-    const txs = await getTransactionHistory(userId, 5);
-    if (txs.length === 0) return "You don't have any transactions yet. Buy or sell something and it'll show up here.";
-    return formatTransactionHistory(txs);
-  }
-
-  // Help
-  if (lower.includes('help') || lower.includes('what can you do')) {
-    return "I'm Moni, your portfolio manager for tokenized stocks on Base. Here's what I can do:\n\n" +
-      "Ask about your portfolio — \"What's my portfolio worth?\"\n" +
-      "Check prices — \"What's NVDA trading at?\"\n" +
-      "Trade — \"Buy $500 of AAPL with USDC\"\n" +
-      "Risk analysis — \"How risky is my portfolio?\"\n" +
-      "Stop-losses — \"Set a stop-loss for AAPL at $180\"\n" +
-      "Price alerts — \"Alert me if TSLA drops below $200\"\n" +
-      "Rebalancing — \"Rebalance to 40% AAPL, 30% NVDA, 30% MSFT\"\n" +
-      "Watchlist — \"What's on my watchlist?\"\n\n" +
-      'Just talk to me naturally — no commands needed.';
-  }
-
-  return "I'm here for your tokenized stock portfolio on Base. Ask me about prices, your portfolio, trades, risk, or strategy. What's on your mind?";
-}
-
-// ─── Token Extraction ───────────────────────────────────────────────────────
-
-function extractTokens(text: string): string[] {
-  const tokens = Object.keys(B20_TOKENS);
-  const found: string[] = [];
-  const upper = text.toUpperCase();
-
-  for (const token of tokens) {
-    if (upper.includes(token) || upper.includes(token.toLowerCase())) {
-      found.push(token);
-    }
-  }
-
-  if (upper.includes('USDC') || upper.includes('usdc')) {
-    found.push('USDC');
-  }
-
-  return [...new Set(found)];
-}
-
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function sendAgentMessage(userId: string, message: string, ctx?: AgentContext): Promise<string> {
-  if (DEMO_MODE === 'true') {
-    return handleDemoMessage(userId, message);
-  }
-
   try {
     return await serializeTurn(userId, () => runAgentLoop(userId, message, ctx));
   } catch (error: any) {
@@ -626,15 +405,9 @@ export async function sendAgentMessage(userId: string, message: string, ctx?: Ag
   }
 }
 
-// Demo users aren't persisted as conversation history, so track first-contact in-memory
-const demoVisited = new Set<string>();
+// ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function isFirstContact(userId: string): Promise<boolean> {
-  if (DEMO_MODE === 'true') {
-    if (demoVisited.has(userId)) return false;
-    demoVisited.add(userId);
-    return true;
-  }
   const store = loadHistory();
   const history = store[userId];
   return !history || history.length === 0;

@@ -36,7 +36,7 @@ export const B20_TOKENS = {
 export type B20TokenSymbol = keyof typeof B20_TOKENS;
 
 // B20 ERC-20 token decimals. Verified on-chain (decimals() = 8) and used for
-// all live balance/value math. Demo mode separately mocks balances at 18.
+// all balance/value math.
 export const B20_DECIMALS = 8;
 
 // Chainlink Price Feed Addresses (Mainnet)
@@ -91,6 +91,7 @@ export const B20_ABI = parseAbi([
 // Chainlink Aggregator V3 ABI (minimal)
 export const CHAINLINK_AGGREGATOR_ABI = parseAbi([
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
+  'function getRoundData(uint80 _roundId) view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
   'function decimals() view returns (uint8)',
   'function description() view returns (string)',
 ] as const);

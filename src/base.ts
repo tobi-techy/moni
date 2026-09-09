@@ -1,5 +1,5 @@
 import { createPublicClient, http, fallback, type PublicClient, type Address } from 'viem';
-import { BASE_RPC_URL, BASE_CHAIN, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
+import { BASE_RPC_URL, BASE_CHAIN, BASE_RPC_FALLBACKS } from './env.js';
 import { 
   B20_TOKENS, 
   CHAINLINK_PRICE_FEEDS, 
@@ -54,15 +54,6 @@ const METADATA_CACHE = new Map<B20TokenSymbol, TokenMetadata>();
 
 // Get token metadata (name, symbol, decimals)
 export async function getTokenMetadata(symbol: B20TokenSymbol): Promise<TokenMetadata> {
-  if (DEMO_MODE === 'true') {
-    return {
-      name: `${symbol} Tokenized Stock`,
-      symbol,
-      decimals: B20_DECIMALS,
-      address: B20_TOKENS[symbol],
-    };
-  }
-
   const cached = METADATA_CACHE.get(symbol);
   if (cached) return cached;
 
@@ -92,16 +83,6 @@ export async function getTokenMetadata(symbol: B20TokenSymbol): Promise<TokenMet
 
 // Get raw balance (B20 token units)
 export async function getRawBalance(symbol: B20TokenSymbol, walletAddress: Address): Promise<bigint> {
-  if (DEMO_MODE === 'true') {
-    // Return demo balance (B20_DECIMALS units to mirror the live contract — 1 token = 1e8)
-    const demoBalances: Record<string, bigint> = {
-      AAPL: 100n * 10n ** 8n,
-      NVDA: 50n * 10n ** 8n,
-      MSFT: 200n * 10n ** 8n,
-    };
-    return demoBalances[symbol] || 0n;
-  }
-
   const client = getPublicClient();
   const address = B20_TOKENS[symbol];
 
@@ -121,17 +102,6 @@ export async function getRawBalance(symbol: B20TokenSymbol, walletAddress: Addre
 
 // Get scaled balance (accounting for multiplier/dividends/splits)
 export async function getScaledBalance(symbol: B20TokenSymbol, walletAddress: Address): Promise<bigint> {
-  if (DEMO_MODE === 'true') {
-    // Demo scaled balances mirror the live ERC-20 units (B20_DECIMALS = 8),
-    // with a demo 1.02x multiplier applied so scaled > raw is visible.
-    const demoBalances: Record<string, bigint> = {
-      AAPL: 102n * 10n ** 8n, // 102 AAPL (with 2% dividend multiplier)
-      NVDA: 51n * 10n ** 8n,  // 51 NVDA
-      MSFT: 204n * 10n ** 8n, // 204 MSFT
-    };
-    return demoBalances[symbol] || 0n;
-  }
-
   const client = getPublicClient();
   const address = B20_TOKENS[symbol];
 
@@ -155,11 +125,6 @@ const MULTIPLIER_TTL_MS = 60_000;
 const MULTIPLIER_CACHE = new Map<B20TokenSymbol, { value: bigint; at: number }>();
 
 export async function getMultiplier(symbol: B20TokenSymbol): Promise<bigint> {
-  if (DEMO_MODE === 'true') {
-    // Demo: 1.02x multiplier (2% dividend accrual)
-    return 102n * (WAD_PRECISION / 100n);
-  }
-
   const cached = MULTIPLIER_CACHE.get(symbol);
   if (cached && Date.now() - cached.at < MULTIPLIER_TTL_MS) return cached.value;
 
@@ -203,23 +168,6 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<TokenPrice 
 }
 
 async function fetchTokenPrice(symbol: B20TokenSymbol): Promise<TokenPrice | null> {
-  if (DEMO_MODE === 'true') {
-    // Demo prices (in USD with 8 decimals)
-    const demoPrices: Record<string, bigint> = {
-      AAPL: 20000000000n,   // $200.00
-      NVDA: 90000000000n,   // $900.00
-      MSFT: 40000000000n,   // $400.00
-      GOOGL: 15000000000n,  // $150.00
-      META: 50000000000n,   // $500.00
-      TSLA: 25000000000n,   // $250.00
-    };
-    return {
-      price: demoPrices[symbol] || 10000000000n,
-      updatedAt: BigInt(Math.floor(Date.now() / 1000)),
-      decimals: 8,
-    };
-  }
-
   const client = getPublicClient();
   const feedAddress = CHAINLINK_PRICE_FEEDS[symbol];
 
@@ -336,6 +284,38 @@ function getFallbackPrice(symbol: B20TokenSymbol): { price: bigint; updatedAt: b
     updatedAt: BigInt(Math.floor(Date.now() / 1000)),
     decimals: 8,
   };
+}
+
+// Real percent change between the latest Chainlink round and the previous one.
+// Stock feeds on Base publish on a sub-hourly heartbeat, so this is genuine
+// on-chain price history — never simulated. `null` when history is unavailable.
+export async function getTokenChangePct(symbol: B20TokenSymbol): Promise<number | null> {
+  const client = getPublicClient();
+  const feedAddress = CHAINLINK_PRICE_FEEDS[symbol];
+  if (!feedAddress) return null;
+  try {
+    const latest = (await client.readContract({
+      address: feedAddress,
+      abi: CHAINLINK_AGGREGATOR_ABI,
+      functionName: 'latestRoundData',
+    })) as readonly [bigint, bigint, bigint, bigint, bigint];
+    const roundId = latest[0];
+    const answer = latest[1];
+    if (roundId <= 1n || answer <= 0n) return null;
+
+    const prev = (await client.readContract({
+      address: feedAddress,
+      abi: CHAINLINK_AGGREGATOR_ABI,
+      functionName: 'getRoundData',
+      args: [roundId - 1n],
+    })) as readonly [bigint, bigint, bigint, bigint, bigint];
+    const prevAnswer = prev[1];
+    if (prevAnswer <= 0n) return null;
+
+    return (Number(answer - prevAnswer) / Number(prevAnswer)) * 100;
+  } catch {
+    return null;
+  }
 }
 
 // Get all token prices at once

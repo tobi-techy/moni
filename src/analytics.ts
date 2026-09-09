@@ -1,5 +1,6 @@
-import { getPortfolio, getTokenPrice, formatUSD } from './base.js';
+import { getPortfolio, getTokenPrice, getTokenChangePct, formatUSD } from './base.js';
 import { getTradingMemory, setTradingMemory } from './ai.js';
+import type { B20TokenSymbol } from './constants.js';
 
 // Portfolio Analytics
 export interface PortfolioAnalytics {
@@ -8,7 +9,7 @@ export interface PortfolioAnalytics {
   topHolding: { symbol: string; valueUSD: bigint; percentage: number } | null;
   diversificationScore: number; // 0-100
   riskLevel: 'low' | 'medium' | 'high';
-  dailyPnL: bigint; // simulated
+  dailyPnL: bigint; // derived from real on-chain price changes, weighted by holding
   allocation: Array<{ symbol: string; percentage: number; valueUSD: bigint }>;
   recommendation?: string;
 }
@@ -16,9 +17,8 @@ export interface PortfolioAnalytics {
 export async function analyzePortfolio(userId: string): Promise<PortfolioAnalytics> {
   const memory = await getTradingMemory(userId);
   const { getUserWalletAddress } = await import('./wallet.js');
-  // In demo mode getUserWalletAddress returns the demo wallet; on live mode a
-  // failed resolution (null) means "not provisioned" — analyze nothing rather
-  // than silently analyzing a demo placeholder address as if it were real.
+  // A failed resolution (null) means "not provisioned" — analyze nothing rather
+  // than silently analyzing a placeholder address as if it were real.
   const walletAddress = (await getUserWalletAddress(userId));
 
   if (!walletAddress) {
@@ -72,8 +72,18 @@ export async function analyzePortfolio(userId: string): Promise<PortfolioAnalyti
   if (portfolio.length === 1) riskLevel = 'high';
   else if (portfolio.length <= 2 || (topHolding && topHolding.percentage > 70)) riskLevel = 'medium';
 
-  // Simulated daily PnL
-  const dailyPnL = (totalValue * BigInt(Math.floor(Math.random() * 200 - 100))) / 10000n; // -1% to +1%
+// Daily PnL from real on-chain price change (Chainlink round-over-round),
+  // weighted by each holding's share of the portfolio.
+  let pnlRatioBps = 0n;
+  if (totalValue > 0n) {
+    for (const holding of portfolio) {
+      const changePct = await getTokenChangePct(holding.symbol as B20TokenSymbol);
+      if (changePct === null) continue;
+      const weightBps = (holding.valueUSD * 10000n) / totalValue;
+      pnlRatioBps += (BigInt(Math.round(changePct * 100)) * weightBps) / 10000n;
+    }
+  }
+  const dailyPnL = (totalValue * pnlRatioBps) / 10000n;
 
   return {
     totalValueUSD: totalValue,
@@ -118,7 +128,7 @@ export function formatAnalytics(analytics: PortfolioAnalytics): string {
   return message;
 }
 
-// Price change calculation (simulated for demo)
+// Real 24h price changes (Chainlink round-over-round)
 export async function getPriceChanges(userId: string): Promise<string> {
   const memory = await getTradingMemory(userId);
   const watchlist = memory.watchlist || ['AAPL', 'NVDA', 'MSFT'];
@@ -129,10 +139,9 @@ export async function getPriceChanges(userId: string): Promise<string> {
     const priceData = await getTokenPrice(symbol as any);
     if (priceData) {
       const price = Number(priceData.price) / 10 ** priceData.decimals;
-      // Simulate 24h change
-      const change = (Math.random() - 0.5) * 10; // -5% to +5%
-      const changeEmoji = change >= 0 ? '🟢' : '🔴';
-      const changeStr = change >= 0 ? `+${change.toFixed(2)}%` : `${change.toFixed(2)}%`;
+      const change = await getTokenChangePct(symbol as B20TokenSymbol);
+      const changeStr = change === null ? 'n/a' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+      const changeEmoji = change === null ? '⚪' : change >= 0 ? '🟢' : '🔴';
       message += `${changeEmoji} **${symbol}**: $${price.toFixed(2)} (${changeStr})\n`;
     }
   }

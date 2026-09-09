@@ -1,9 +1,8 @@
-// Live conversational rehearsal for the demo recording.
+// Live conversational rehearsal.
 // Run with: npm run live
-// Requires: CENCORI_API_KEY set, DEMO_MODE=false (env).
+// Requires: CENCORI_API_KEY + PROJECT_ID/PROJECT_SECRET (live-only build).
 // Drives a realistic scripted conversation through the REAL agent loop and prints
 // each reply verbatim + latency, so you can eyeball naturalness BEFORE recording.
-process.env.DEMO_MODE = process.env.DEMO_MODE || 'false';
 
 type Probe = { say: string; note: string; expect?: RegExp };
 
@@ -26,7 +25,7 @@ function strip(msg: string): string {
 
 async function main() {
   if (!process.env.CENCORI_API_KEY) {
-    console.error('❌ Set CENCORI_API_KEY first (and DEMO_MODE=false).');
+    console.error('❌ Set CENCORI_API_KEY first.');
     process.exitCode = 1;
     return;
   }

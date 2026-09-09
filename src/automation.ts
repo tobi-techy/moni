@@ -1,5 +1,5 @@
 import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
-import { getTokenPrice, getPortfolio, formatUSD } from './base.js';
+import { getTokenPrice, getTokenChangePct, getPortfolio, formatUSD } from './base.js';
 import { getUserWalletAddress } from './wallet.js';
 
 // Stop-loss / Take-profit automation
@@ -106,7 +106,7 @@ export async function checkRebalanceNeeded(userId: string): Promise<{
   
   if (rebalanceStrategies.length === 0) return null;
   
-  // For demo, just use the first strategy
+  // Multiple concurrent rebalance plans aren't supported — evaluate the first one.
   const strategy = rebalanceStrategies[0];
   const config = strategy.params as RebalanceConfig;
   
@@ -163,7 +163,8 @@ export async function checkRebalanceNeeded(userId: string): Promise<{
   return { needed, suggestions };
 }
 
-// Market sentiment (simulated)
+// Market sentiment, derived from real on-chain price momentum (last Chainlink
+// round vs the previous one) — never simulated.
 export interface SentimentData {
   symbol: string;
   sentiment: 'bullish' | 'bearish' | 'neutral';
@@ -173,15 +174,32 @@ export interface SentimentData {
 }
 
 export async function getMarketSentiment(symbols: string[]): Promise<SentimentData[]> {
-  // In production, would fetch from Twitter, news APIs, etc.
-  // For demo, simulate
-  return symbols.map(symbol => ({
-    symbol,
-    sentiment: Math.random() > 0.5 ? 'bullish' : Math.random() > 0.5 ? 'bearish' : 'neutral',
-    score: (Math.random() - 0.5) * 2,
-    sources: ['Twitter', 'Reddit', 'News'],
-    timestamp: Date.now(),
-  }));
+  return Promise.all(
+    symbols.map(async (symbol) => {
+      const change = await getTokenChangePct(symbol as any);
+      let sentiment: SentimentData['sentiment'] = 'neutral';
+      let score = 0;
+      if (change !== null) {
+        if (change >= 1) {
+          sentiment = 'bullish';
+          score = Math.min(1, change / 5);
+        } else if (change <= -1) {
+          sentiment = 'bearish';
+          score = Math.max(-1, change / 5);
+        } else {
+          sentiment = 'neutral';
+          score = change / 5;
+        }
+      }
+      return {
+        symbol,
+        sentiment,
+        score,
+        sources: change === null ? [] : ['Chainlink (on-chain price momentum)'],
+        timestamp: Date.now(),
+      };
+    })
+  );
 }
 
 export function formatSentiment(sentiments: SentimentData[]): string {
@@ -192,7 +210,7 @@ export function formatSentiment(sentiments: SentimentData[]): string {
     const bar = '█'.repeat(Math.max(1, Math.round((s.score + 1) * 5)));
     message += `${emoji} **${s.symbol}**: ${s.sentiment.toUpperCase()} (${s.score.toFixed(2)})\n`;
     message += `   ${bar}\n`;
-    message += `   Sources: ${s.sources.join(', ')}\n\n`;
+    message += `   Sources: ${s.sources.join(', ') || 'No live data available'}\n\n`;
   }
   
   return message;

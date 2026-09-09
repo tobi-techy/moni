@@ -23,7 +23,7 @@ import { createWalletClient, http, fallback, type WalletClient, type Address, ty
 import { createParaRestViemAccount } from '@getpara/rest-sdk/viem';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, BASE_RPC_FALLBACKS, BASE_CHAIN, DEMO_MODE } from './env.js';
+import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, BASE_RPC_FALLBACKS, BASE_CHAIN } from './env.js';
 
 // Failover transport shared by wallet clients. Falls back to community Base
 // RPCs when mainnet.base.org rate-limits (code -32016), so tx broadcasting
@@ -34,8 +34,10 @@ function getRpcTransport(): Transport {
   );
 }
 
-// Demo wallet address used when DEMO_MODE=true (no Para calls made).
-export const DEMO_WALLET_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
+// Legacy demo placeholder written by pre-2.x demo-mode runs. Kept only as a
+// stale-record guard so an old cached demo entry can never be surfaced as the
+// user's real wallet. No live code path ever produces this address now.
+const LEGACY_DEMO_WALLET_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
 
 let paraClient: ParaRestClient | null = null;
 
@@ -144,29 +146,13 @@ async function waitForReadyWallet(
 // Idempotent: cached mapping -> Para lookup -> create. Returns null if Para is
 // not configured or provisioning fails (callers surface a setup message).
 export async function resolveParaUser(userId: string): Promise<ParaRecord | null> {
-  if (DEMO_MODE === 'true') {
-    const store = loadParaStore();
-    const cached = store[userId];
-    if (cached?.walletId) return cached;
-    const record: ParaRecord = {
-      iMessageUserId: userId,
-      walletId: 'para-demo',
-      walletAddress: DEMO_WALLET_ADDRESS,
-      userIdentifier: paraIdentifier(userId),
-      createdAt: new Date().toISOString(),
-    };
-    store[userId] = record;
-    saveParaStore(store);
-    return record;
-  }
-
   const store = loadParaStore();
   const cached = store[userId];
-  // Live mode must never serve a cached demo placeholder (walletId 'para-demo'
-  // / DEMO_WALLET_ADDRESS) — those were written by earlier demo-mode runs and
-  // would otherwise shadow the real Para wallet forever. Re-resolve instead.
+  // Never serve a cached demo placeholder (walletId 'para-demo' / the legacy
+  // demo address) — those were written by earlier demo-mode runs and would
+  // otherwise shadow the real Para wallet forever. Re-resolve instead.
   const isDemoRecord =
-    cached?.walletId === 'para-demo' || cached?.walletAddress === DEMO_WALLET_ADDRESS;
+    cached?.walletId === 'para-demo' || cached?.walletAddress === LEGACY_DEMO_WALLET_ADDRESS;
   if (cached?.walletAddress && !isDemoRecord) return cached;
 
   let para: ParaRestClient;
@@ -239,11 +225,6 @@ export function getBaseChain(): Chain {
 // Create a viem wallet client whose account signs through Para REST. Use its
 // sendTransaction()/signMessage() for real agent-driven on-chain actions.
 export async function createUserWalletClient(userId: string): Promise<WalletClient<Transport, Chain, LocalAccount> | null> {
-  if (DEMO_MODE === 'true') {
-    console.log('[DEMO] Returning mock wallet client');
-    return null;
-  }
-
   try {
     const record = await resolveParaUser(userId);
     if (!record) return null;
@@ -273,11 +254,8 @@ export async function getUserWalletClient(userId: string): Promise<WalletClient<
 // Get user's wallet address, provisioning the Para wallet if needed.
 export async function getUserWalletAddress(
   userId: string,
-  _opts?: { phone?: string; persist?: boolean }
+  opts?: { phone?: string; persist?: boolean }
 ): Promise<Address | null> {
-  if (DEMO_MODE === 'true') {
-    return DEMO_WALLET_ADDRESS;
-  }
   const record = await resolveParaUser(userId);
   return record?.walletAddress ?? null;
 }
@@ -285,10 +263,6 @@ export async function getUserWalletAddress(
 // Link a wallet to a user (for wallet connection flow) — no-op under Para:
 // each user already has one deterministic REST wallet; nothing is linked manually.
 export async function linkWallet(userId: string, walletAddress: Address): Promise<boolean> {
-  if (DEMO_MODE === 'true') {
-    console.log('[DEMO] Wallet linked:', walletAddress);
-    return true;
-  }
   console.log('Wallets are provisioned deterministically via resolveParaUser');
   return true;
 }
@@ -310,7 +284,6 @@ export async function getParaWalletBalance(
   userId: string,
   tokenAddress?: Address
 ): Promise<{ balance: string; symbol: string; rawBalance: string } | null> {
-  if (DEMO_MODE === 'true') return null;
   try {
     const record = await resolveParaUser(userId);
     if (!record) return null;
@@ -332,10 +305,6 @@ export async function sendNativeTransfer(
   to: Address,
   valueWei: string
 ): Promise<{ txHash?: string; signedTransaction: string } | null> {
-  if (DEMO_MODE === 'true') {
-    console.log(`[DEMO] Native transfer to ${to}: ${valueWei}`);
-    return null;
-  }
   try {
     const record = await resolveParaUser(userId);
     if (!record) return null;
@@ -359,7 +328,6 @@ export async function getParaTransactionHistory(
   userId: string,
   limit = 10
 ): Promise<Array<{ hash?: string; status?: string; to?: string; createdAt: string }>> {
-  if (DEMO_MODE === 'true') return [];
   try {
     const record = await resolveParaUser(userId);
     if (!record) return [];
@@ -374,18 +342,4 @@ export async function getParaTransactionHistory(
     console.error('Error listing Para transactions:', error);
     return [];
   }
-}
-
-// Demo mode: simulate wallet balance
-export async function getDemoBalance(tokenSymbol: string): Promise<bigint> {
-  // Return simulated balances for demo
-  const demoBalances: Record<string, bigint> = {
-    AAPL: 100000000000000000000n, // 100 AAPL (18 decimals)
-    NVDA: 50000000000000000000n,  // 50 NVDA
-    MSFT: 200000000000000000000n, // 200 MSFT
-    USDC: 5000000000n,            // 5000 USDC (6 decimals)
-    WETH: 2000000000000000000n,   // 2 WETH (18 decimals)
-  };
-
-  return demoBalances[tokenSymbol] || 0n;
 }
