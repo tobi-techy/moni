@@ -366,12 +366,13 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
 
     // Submit transaction via the Para-backed wallet client: signs through Para
     // REST (key held in Para's enclave) and broadcasts over the Base RPC.
+    // Only the swap calldata + 1inch gas estimate are fixed; fees are left for
+    // viem to prepare (EIP-1559) so the tx succeeds under live Base congestion.
     const txHash = await walletClient.sendTransaction({
       to: swapTx.to as Address,
       data: swapTx.data as `0x${string}`,
       value: BigInt(swapTx.value || '0'),
       gas: BigInt(swapTx.gas || '200000'),
-      gasPrice: BigInt(swapTx.gasPrice || '1000000000'),
       chain: walletClient.chain,
     });
 

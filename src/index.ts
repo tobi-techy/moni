@@ -239,8 +239,6 @@ async function handlePortfolio(space: any, userId: string, phone?: string) {
     return;
   }
 
-  await space.send('📊 Fetching your portfolio...');
-  
   try {
     const portfolio = await getPortfolio(walletAddress);
     const message = formatPortfolioMessage(portfolio);
@@ -248,8 +246,7 @@ async function handlePortfolio(space: any, userId: string, phone?: string) {
   } catch (error) {
     console.error('Portfolio error:', error);
     await space.send('❌ Error fetching portfolio. Please try again.');
-  }
-}
+  }}
 
 // Handle price command
 async function handlePrice(space: any, symbol: string) {
@@ -310,8 +307,6 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
   }
 
   // Get quote
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
-  
   const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 6).toString());
   
   if (!quote) {
@@ -382,10 +377,7 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
     return;
   }
 
-  await space.send(`🔍 Getting quote for ${amount} ${fromToken} → ${toToken}...`);
-  
-  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());
-  
+  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());  
   if (!quote) {
     await space.send('❌ Could not get quote.');
     return;
@@ -437,8 +429,6 @@ async function handleConfirm(space: any, userId: string) {
   
   if (DEMO_MODE === 'true') {
     // Demo mode: simulate trade
-    await space.send('⏳ **Executing trade (demo mode)...**');
-    
     // Simulate delay
     await new Promise(r => setTimeout(r, 2000));
     
@@ -537,8 +527,6 @@ async function handleWatchlist(space: any, userId: string, args: string[]) {
     await space.send(`✅ Removed ${symbol} from watchlist.`);
   } else {
     // Show watchlist with prices
-    await space.send('📋 Fetching watchlist prices...');
-    
     const prices = await Promise.all(
       memory.watchlist.map(async (symbol: string) => {
         const priceData = await getTokenPrice(symbol as B20TokenSymbol);
@@ -735,7 +723,7 @@ async function handleHelp(space: any) {
 // Handle connect
 async function handleConnect(space: any, userId: string, phone?: string) {
   const session = getSession(userId);
-  
+
   if (session.authenticated && session.walletAddress) {
     await showTyping(space);
     await sendRich(
@@ -743,9 +731,9 @@ async function handleConnect(space: any, userId: string, phone?: string) {
       markdown(
         `**Wallet Connected**\n\n` +
         `Address: \`${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\`\n\n` +
-        `You're ready to trade! Ask me anything — like "What's my portfolio worth?"`
+        `You're all set — want to see your portfolio or check a price?`
       ),
-      `✅ Wallet Connected — Address: ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\n\nYou're ready to trade!`
+      `✅ Wallet Connected — Address: ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\n\nYou're all set — want to see your portfolio or check a price?`
     );
     await hideTyping(space);
     return;
@@ -847,7 +835,7 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
     await hideTyping(space);
   } catch (error) {
     console.error('Agent error:', error);
-    await space.send('❌ Sorry, I had trouble processing that. Try a command or ask again.');
+    await space.send("Sorry, I hit a snag there. Mind trying that again?");
     await hideTyping(space);
   }
 }
@@ -855,17 +843,15 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 // First-time welcome — kept short, no slash-command pressure
 function buildWelcomeMessage(walletConnected: boolean): string {
   let message =
-    '👋 Hey, I\'m Moni — your on-chain portfolio manager for tokenized stocks, right here in iMessage.\n\n' +
-    'No apps, no commands — just tell me what you want. A few things you can ask:\n\n' +
-    '• "What\'s my portfolio worth?"\n' +
-    '• "Buy $500 of AAPL with USDC"\n' +
-    '• "How risky is my portfolio?"\n';
+    "Hey, I'm Moni — I keep an eye on your tokenized stocks, right here in iMessage. " +
+    "No apps, no commands, just tell me what you want. Ask what your portfolio's worth, " +
+    "or say something like \"buy $500 of AAPL\".";
 
   if (!walletConnected) {
     message += '\nI couldn\'t provision your wallet yet — say something else and I\'ll try again on the spot.\n';
   }
 
-  message += '\nWhat\'s on your mind?';
+  message += " What's on your mind?";
   return message;
 }
 

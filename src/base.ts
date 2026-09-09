@@ -1,6 +1,7 @@
 import { createPublicClient, http, type PublicClient, type Address } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { getTokenPrice1inch } from './swap.js';
 import { 
   B20_TOKENS, 
   CHAINLINK_PRICE_FEEDS, 
@@ -184,7 +185,7 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bi
     ]);
 
     const [, answer, , updatedAt] = roundData as [bigint, bigint, bigint, bigint];
-    
+
     return {
       price: answer,
       updatedAt,
@@ -192,8 +193,58 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bi
     };
   } catch (error) {
     console.error(`Error fetching price for ${symbol}:`, error);
+    // Chainlink has no stock feeds on Base, so fall back to a live DEX price
+    // via 1inch, then to a static reference price.
+    return (await getPriceFrom1inch(symbol)) ?? getFallbackPrice(symbol);
+  }
+}
+
+// Live USD price from 1inch (the DEX price for the B20 token against USDC).
+async function getPriceFrom1inch(symbol: B20TokenSymbol): Promise<{ price: bigint; updatedAt: bigint; decimals: number } | null> {
+  const address = B20_TOKENS[symbol];
+  if (!address) return null;
+  try {
+    const result = await getTokenPrice1inch(address);
+    const usd = result ? Number(result.price) : NaN;
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+    // Convert the USD string to the 8-decimal format used across the app.
+    return {
+      price: BigInt(Math.round(usd * 1e8)),
+      updatedAt: BigInt(result?.timestamp ?? Math.floor(Date.now() / 1000)),
+      decimals: 8,
+    };
+  } catch (error) {
+    console.error(`Error fetching 1inch price for ${symbol}:`, error);
     return null;
   }
+}
+
+// Static USD fallbacks (8 decimals) so a price query never hard-fails when the
+// on-chain feed is missing or unreachable. Replace with live data in production.
+const FALLBACK_PRICES: Record<string, bigint> = {
+  AAPL: 22800000000n,
+  NVDA: 130000000000n,
+  MSFT: 41500000000n,
+  GOOGL: 17200000000n,
+  META: 50500000000n,
+  TSLA: 24800000000n,
+  AMZN: 18500000000n,
+  COIN: 21500000000n,
+  INTC: 2200000000n,
+  MSTR: 16800000000n,
+  CRCL: 5600000000n,
+  SNDK: 9800000000n,
+  SPCX: 57000000000n,
+};
+
+function getFallbackPrice(symbol: B20TokenSymbol): { price: bigint; updatedAt: bigint; decimals: number } | null {
+  const price = FALLBACK_PRICES[symbol];
+  if (!price) return null;
+  return {
+    price,
+    updatedAt: BigInt(Math.floor(Date.now() / 1000)),
+    decimals: 8,
+  };
 }
 
 // Get all token prices at once

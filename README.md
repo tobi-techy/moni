@@ -22,7 +22,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 - Node.js 20+
 - [Photon/Spectrum account](https://app.photon.codes/) for iMessage infrastructure
 - [Para account](https://www.getpara.com/) for MPC wallets
-- [1inch API key](https://portal.1inch.dev/) for DEX aggregation (optional for demo)
+- [1inch API key](https://business.1inch.com/portal) for DEX aggregation (optional for demo)
 - [Cencori API key](https://cencori.com) for the AI agent (optional for demo)
 
 ### Installation
