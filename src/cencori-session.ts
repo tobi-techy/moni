@@ -105,7 +105,7 @@ function friendlyMessage(raw: string): string {
     return 'My AI provider is rate-limiting right now — give it a minute and try again.';
   }
   if (/circuit is open/i.test(msg)) {
-    return 'My AI provider is briefly degraded — give it a minute and try again.';
+    return 'My AI provider is cooling down from heavy load — give it a couple of minutes, then try again.';
   }
   if (/pricing is not configured|pricing_unavailable|not configured/i.test(msg)) {
     return "The AI model behind me isn't enabled on this plan. Ask whoever runs me to pick a supported model.";
@@ -244,6 +244,7 @@ export async function runSessionTurn(
                 `My AI provider hiccuped — please try again in a moment. ${msg.slice(0, 120)}`
               ) as any;
               err.retryable = true;
+              err.raw = msg;
               throw err;
             }
             throw new FriendlyAgentError(friendlyMessage(msg));
@@ -269,6 +270,7 @@ export async function runSessionTurn(
     const raw = error?.message || String(error);
     const friendly: any = new FriendlyAgentError(friendlyMessage(raw));
     if (retryable(raw) && toolCalls === 0) friendly.retryable = true;
+    friendly.raw = raw;
     throw friendly;
   }
   };
@@ -278,11 +280,17 @@ export async function runSessionTurn(
   // tool call into a retry is intentionally prevented (see runAttempt).
   const MAX_TURN_ATTEMPTS = 3;
   const TURN_RETRY_BACKOFF_MS = [4000, 12000];
+  // An open provider circuit needs much longer to cool than a plain rate
+  // limit, so give it a longer window before surfacing a failure.
+  const CIRCUIT_RETRY_BACKOFF_MS = [15000, 45000];
+
+  const isCircuitOpen = (e: any): boolean => /circuit is open|circuit_open/i.test(String(e?.raw ?? e?.message ?? ''));
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < MAX_TURN_ATTEMPTS; attempt++) {
     if (attempt > 0) {
-      await new Promise(r => setTimeout(r, TURN_RETRY_BACKOFF_MS[attempt - 1] ?? 2000));
+      const backoff = isCircuitOpen(lastError) ? CIRCUIT_RETRY_BACKOFF_MS : TURN_RETRY_BACKOFF_MS;
+      await new Promise(r => setTimeout(r, backoff[attempt - 1] ?? 2000));
     }
     try {
       return await runAttempt();
