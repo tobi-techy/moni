@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
 import { typing, markdown } from 'spectrum-ts';
+import { sanitizeOutgoingText, sanitizeSpace } from './text.js';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { startProactiveMonitoring, triggerProactiveCheck, sendDailySummary } from './proactive.js';
@@ -16,6 +17,10 @@ import { getTransactionHistory, formatTransactionHistory, addTransaction, Transa
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
 import { createPublicClient, http, type Address as ViemAddress } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+
+// Markdown builder that strips em-dashes before the text is captured in the
+// builder closure (spectrum's markdown() bakes the string in at build time).
+const md = (s: string) => markdown(sanitizeOutgoingText(s));
 
 // Structured logging
 const log = {
@@ -97,8 +102,8 @@ interface UserSession {
   tradingMemory: TradingMemory;
   lastActive: number;
   space?: any;
-  /** True once we've tried resolution for a messaging-only session (rate-limit guard). */
-  resolutionAttempted?: boolean;
+  /** Timestamp of the last wallet-resolution attempt (rate-limit guard; retries allowed after a cooldown). */
+  lastResolutionAttempt?: number;
 }
 
 const userSessions = new Map<string, UserSession>();
@@ -146,7 +151,10 @@ async function sendProactiveMessage(userId: string, message: string): Promise<vo
     return;
   }
   try {
-    await session.space.send(message);
+    // Belt-and-braces: the stored space is normally already sanitizeSpace-wrapped,
+    // but sanitize here too so proactive text is clean regardless of how the
+    // space was stored.
+    await session.space.send(sanitizeOutgoingText(message));
   } catch (error) {
     log.error('Failed to send proactive message', { userId, error: (error as Error).message });
   }
@@ -728,7 +736,7 @@ async function handleConnect(space: any, userId: string, phone?: string) {
     await showTyping(space);
     await sendRich(
       space,
-      markdown(
+      md(
         `**Wallet Connected**\n\n` +
         `Address: \`${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\`\n\n` +
         `You're all set — want to see your portfolio or check a price?`
@@ -747,7 +755,7 @@ async function handleConnect(space: any, userId: string, phone?: string) {
     await showTyping(space);
     await sendRich(
       space,
-      markdown(
+      md(
         `**Demo Wallet Connected**\n\n` +
         `Address: \`${DEMO_WALLET_ADDRESS.slice(0, 6)}...${DEMO_WALLET_ADDRESS.slice(-4)}\`\n\n` +
         `You're in demo mode — all trades are simulated.\n` +
@@ -769,7 +777,7 @@ async function handleConnect(space: any, userId: string, phone?: string) {
       session.authenticated = true;
       await sendRich(
         space,
-        markdown(
+        md(
           `**Wallet Connected**\n\n` +
           `Address: \`${record.walletAddress.slice(0, 6)}...${record.walletAddress.slice(-4)}\`\n\n` +
           `Your on-chain wallet was created for you and your profile is linked — all set to trade.`
@@ -787,7 +795,7 @@ async function handleConnect(space: any, userId: string, phone?: string) {
   await showTyping(space);
   await sendRich(
     space,
-    markdown(
+    md(
       `**Wallet setup needs attention**\n\n` +
       `I couldn't create your on-chain wallet just now — it's handled automatically server-side, so nothing for you to do. My devs should check the Para credentials, then try /connect again.`
     ),
@@ -803,11 +811,16 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
   let walletConnected = !!(session.authenticated && session.walletAddress);
 
   // Provision the user's Para EVM wallet automatically on first contact (REST
-// wallet, country-agnostic — no signup needed). Resolution is cached and
-// persisted after the first success, and guarded so a missing config doesn't
-// retry the network on every message.
-  if (!walletConnected && !session.resolutionAttempted) {
-    session.resolutionAttempted = true;
+  // wallet, country-agnostic — no signup needed). Resolution is cached and
+  // persisted after the first success. Failed attempts retry after a short
+  // cooldown so transient Para hiccups self-heal without hammering the API.
+  const RESOLUTION_RETRY_MS = 60_000;
+  const canAttemptResolution =
+    !walletConnected &&
+    (!session.lastResolutionAttempt || Date.now() - session.lastResolutionAttempt > RESOLUTION_RETRY_MS);
+
+  if (canAttemptResolution) {
+    session.lastResolutionAttempt = Date.now();
     try {
       const record = await resolveParaUser(userId);
       if (record?.walletAddress) {
@@ -822,10 +835,9 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 
   await showTyping(space);
 
-  if (firstContact) {
-    await space.send(buildWelcomeMessage(walletConnected));
-  }
-
+  // Single intro: the agent writes the welcome itself on first contact (the
+  // context block flags it), so no hardcoded greeting is sent here. Sending
+  // both was what produced the duplicate intro bubbles.
   try {
     const response = await sendAgentMessage(userId, message, {
       walletConnected,
@@ -840,23 +852,12 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
   }
 }
 
-// First-time welcome — kept short, no slash-command pressure
-function buildWelcomeMessage(walletConnected: boolean): string {
-  let message =
-    "Hey, I'm Moni — I keep an eye on your tokenized stocks, right here in iMessage. " +
-    "No apps, no commands, just tell me what you want. Ask what your portfolio's worth, " +
-    "or say something like \"buy $500 of AAPL\".";
-
-  if (!walletConnected) {
-    message += '\nI couldn\'t provision your wallet yet — say something else and I\'ll try again on the spot.\n';
-  }
-
-  message += " What's on your mind?";
-  return message;
-}
-
 // Main message handler
 async function handleMessage(space: any, userId: string, text: string) {
+  // Wrap the space so every outgoing message (agent replies, static strings,
+  // proactive sends) has em-dashes stripped deterministically at the send
+  // chokepoint. Idempotent: wrapping an already-wrapped space is a no-op.
+  space = sanitizeSpace(space);
   const session = getSession(userId, space);
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();

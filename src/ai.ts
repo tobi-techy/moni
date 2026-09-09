@@ -6,6 +6,7 @@ import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { B20_TOKENS } from './constants.js';
 import { bigintJSONReplacer, bigintJSONReviver } from './bigint-json.js';
 import { runSessionTurn } from './cencori-session.js';
+import { sanitizeOutgoingText } from './text.js';
 
 export { bigintJSONReplacer, bigintJSONReviver };
 
@@ -81,6 +82,7 @@ HOW YOU TALK
 - Concise but substantive. Two clear sentences with real insight > a wall of text.
 - Match the user's energy: casual question → casual answer; serious allocation question → precise detail.
 - No markdown, no emoji, no bullet-point dumps unless the user explicitly asks.
+- Never use em-dashes (—) in your replies. Use commas, periods, or plain hyphens instead.
 - iMessage formatting: short lines, sentence case, no dense tables or key/value dumps. One thought per line.
 - End most replies with a single next step — a specific question or offer — so the conversation keeps moving.
 - If a trade or strategy is risky or losing, be honest and suggest a concrete alternative — never coach someone into a bad bet.
@@ -283,11 +285,12 @@ async function runSessionPath(
 ): Promise<string> {
   const historyStore = loadHistory();
   const history = historyStore[userId] || [];
-  const content = await runSessionTurn(userId, {
+  // Strip em-dashes from the model's reply before it hits history or iMessage.
+  const content = sanitizeOutgoingText(await runSessionTurn(userId, {
     input: userMessage,
     instructions: `${SYSTEM_PROMPT}\n\n${contextBlock}`,
     tools: CENCORI_TOOLS as unknown as Array<Record<string, unknown>>,
-  });
+  }));
 
   // Keep a local transcript too (drives isFirstContact + offline diagnostics).
   history.push({ role: 'user', content: userMessage });
@@ -339,7 +342,7 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
 
     // No tool calls — final answer
     if (!response.toolCalls || response.toolCalls.length === 0) {
-      const content = response.content || "I'm not sure what to say — try rephrasing that.";
+      const content = sanitizeOutgoingText(response.content || "I'm not sure what to say. Try rephrasing that.");
       history.push({ role: 'assistant', content });
       historyStore[userId] = history;
       saveHistory(historyStore);
@@ -379,7 +382,7 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
     }
   }
 
-  const fallback = "I'm going in circles trying to figure that out. Let me try a simpler approach — can you rephrase?";
+  const fallback = "I'm going in circles trying to figure that out. Let me try a simpler approach: can you rephrase?";
   history.push({ role: 'assistant', content: fallback });
   historyStore[userId] = history;
   saveHistory(historyStore);
@@ -391,6 +394,20 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
 async function handleDemoMessage(userId: string, message: string): Promise<string> {
   const { executeTool } = await import('./agent-tools.js');
   const lower = message.toLowerCase();
+
+  // Wallet address request
+  if (lower.includes('wallet') && (lower.includes('address') || lower.includes('get') || lower.includes('my') || lower.includes('connect'))) {
+    const result = await executeTool('get_wallet_info' as ToolName, { userId });
+    if (result.success && result.data) {
+      return `Your wallet is all set. Address on Base: ${result.data.address}\n\nFund it with USDC on Base and you can start trading tokenized stocks. Want me to walk you through it?`;
+    }
+    return result.error || 'Could not get your wallet right now.';
+  }
+
+  // Greetings / small talk -> the intro style Moni uses on first contact
+  if (/^(hey|hi|hello|yo|sup|good (morning|afternoon|evening))\b/.test(lower)) {
+    return "Hey there! I'm Moni, your portfolio manager and market analyst for Coinbase tokenized stocks on Base.\n\nI can help you track prices, manage your portfolio, or even execute trades for tokens like AAPL, NVDA, or MSFT.\n\nWhat's on your mind today?";
+  }
 
   // Risk analysis
   if (lower.includes('risk') || lower.includes('analyze') || lower.includes('how risky')) {

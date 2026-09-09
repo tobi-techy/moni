@@ -23,48 +23,24 @@ import { base, baseSepolia } from 'viem/chains';
 import { createParaRestViemAccount } from '@getpara/rest-sdk/viem';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { PARA_API_KEY, PARA_ENVIRONMENT, BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, DEMO_MODE } from './env.js';
 
 // Demo wallet address used when DEMO_MODE=true (no Para calls made).
 export const DEMO_WALLET_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
 
 let paraClient: ParaRestClient | null = null;
 
-function resolveParaEnv(): 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl: string } {
-  const raw = PARA_ENVIRONMENT;
-  if (raw && typeof raw === 'object' && 'baseUrl' in raw) {
-    return raw;
-  }
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      throw new Error('Para credentials not configured. Set PARA_ENVIRONMENT in .env (PROD, BETA, SANDBOX)');
-    }
-    const upper = trimmed.toUpperCase();
-    const VALID_ENVS = ['PROD', 'BETA', 'SANDBOX'] as const;
-    const matched = VALID_ENVS.find(e => e === upper);
-    if (matched) {
-      return matched;
-    }
-    if (/^https?:\/\//.test(trimmed)) {
-      return { baseUrl: trimmed };
-    }
-    throw new Error(
-      `Invalid PARA_ENVIRONMENT '${raw}'. Expected PROD, BETA, or SANDBOX (or a baseUrl object like { baseUrl: 'https://...' }).`
-    );
-  }
-  throw new Error('Invalid PARA_ENVIRONMENT value.');
-}
-
 export function getParaClient(): ParaRestClient {
   if (!paraClient) {
     if (!PARA_API_KEY) {
       throw new Error('Para credentials not configured. Set PARA_API_KEY in .env');
     }
-    paraClient = new ParaRestClient({ apiKey: PARA_API_KEY, env: resolveParaEnv() });
-    if (process.env.NODE_ENV === 'production' && PARA_ENVIRONMENT !== 'PROD') {
+    // PARA_REST_ENV is pre-normalized in env.ts, so the constructor can never
+    // hit its "baseUrl is required" validation error.
+    paraClient = new ParaRestClient({ apiKey: PARA_API_KEY, env: PARA_REST_ENV });
+    if (process.env.NODE_ENV === 'production' && !PARA_IS_PROD) {
       console.warn(
-        `[Para] PARA_ENVIRONMENT is '${PARA_ENVIRONMENT}' but NODE_ENV=production. ` +
+        `[Para] Para environment is not PROD but NODE_ENV=production. ` +
         `BETA/SANDBOX are for testing only (50-user cap, no real funds). Set PARA_ENVIRONMENT=PROD with a PRODUCTION API key before going live.`
       );
     }
@@ -120,7 +96,12 @@ function isConflict(error: unknown): boolean {
   return error instanceof ParaRestError && error.status === 409;
 }
 
-async function findReadyWallet(
+// Find the user's existing EVM wallet WITHOUT a status filter. A previous
+// attempt may have left a wallet in `creating`; filtering on `ready` here was
+// the repeat-failure trap: create() then 409s forever while findReadyWallet()
+// keeps returning null. Prefer a ready wallet, otherwise take the first so we
+// can wait on it below.
+async function findWallet(
   para: ParaRestClient,
   identifier: string
 ): Promise<RestWallet | null> {
@@ -128,9 +109,8 @@ async function findReadyWallet(
     userIdentifier: identifier,
     userIdentifierType: 'CUSTOM_ID',
     type: 'EVM',
-    status: 'ready',
   });
-  return res.data[0] ?? null;
+  return res.data.find((w) => w.status === 'ready') ?? res.data[0] ?? null;
 }
 
 // Key generation is asynchronous: a create response can report `creating` even
@@ -175,49 +155,65 @@ export async function resolveParaUser(userId: string): Promise<ParaRecord | null
   const cached = store[userId];
   if (cached?.walletAddress) return cached;
 
-  const para = getParaClient();
-  const identifier = paraIdentifier(userId);
-
-  let wallet = await findReadyWallet(para, identifier);
-  if (!wallet) {
-    try {
-      wallet = await para.createWallet(
-        {
-          type: 'EVM',
-          userIdentifier: identifier,
-          userIdentifierType: 'CUSTOM_ID',
-        },
-        { idempotencyKey: crypto.randomUUID() }
-      );
-    } catch (error) {
-      if (isConflict(error)) {
-        wallet = await findReadyWallet(para, identifier);
-      } else {
-        console.error('Para wallet creation failed:', (error as Error).message);
-        return null;
-      }
-    }
-  }
-  if (!wallet) return null;
-
-  const ready = await waitForReadyWallet(para, wallet.id);
-  if (!ready?.address) {
-    console.error('Para wallet not ready within timeout:', wallet.id, wallet.status);
+  let para: ParaRestClient;
+  try {
+    para = getParaClient();
+  } catch (error) {
+    // Misconfiguration (e.g. missing API key) — log once per attempt and bail
+    // gracefully instead of throwing through every caller.
+    console.error('Para client setup failed:', (error as Error).message);
     return null;
   }
+  const identifier = paraIdentifier(userId);
 
-  const record: ParaRecord = {
-    iMessageUserId: userId,
-    walletId: ready.id,
-    walletAddress: ready.address as Address,
-    userIdentifier: identifier,
-    createdAt: new Date().toISOString(),
-  };
+  try {
+    let wallet = await findWallet(para, identifier);
+    if (!wallet) {
+      try {
+        wallet = await para.createWallet(
+          {
+            type: 'EVM',
+            userIdentifier: identifier,
+            userIdentifierType: 'CUSTOM_ID',
+          },
+          { idempotencyKey: crypto.randomUUID() }
+        );
+      } catch (error) {
+        if (isConflict(error)) {
+          wallet = await findWallet(para, identifier);
+        } else {
+          console.error('Para wallet creation failed:', (error as Error).message);
+          return null;
+        }
+      }
+    }
+    if (!wallet) return null;
 
-  store[userId] = record;
-  saveParaStore(store);
-  console.log(`[Para] Wallet ready for ${userId}: ${ready.address} (${ready.id})`);
-  return record;
+    const ready = wallet.status === 'ready'
+      ? wallet
+      : await waitForReadyWallet(para, wallet.id);
+    if (!ready?.address) {
+      console.error('Para wallet not ready within timeout:', wallet.id, wallet.status);
+      return null;
+    }
+
+    const record: ParaRecord = {
+      iMessageUserId: userId,
+      walletId: ready.id,
+      walletAddress: ready.address as Address,
+      userIdentifier: identifier,
+      createdAt: new Date().toISOString(),
+    };
+
+    store[userId] = record;
+    saveParaStore(store);
+    console.log(`[Para] Wallet ready for ${userId}: ${ready.address} (${ready.id})`);
+    return record;
+  } catch (error) {
+    // Network/HTTP failures — callers treat null as "provisioning unavailable".
+    console.error('Para resolve failed:', (error as Error).message);
+    return null;
+  }
 }
 
 // Get the appropriate Base chain

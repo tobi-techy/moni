@@ -2,8 +2,59 @@
 export const PROJECT_ID = process.env.PROJECT_ID || '';
 export const PROJECT_SECRET = process.env.PROJECT_SECRET || '';
 export const PARA_API_KEY = process.env.PARA_API_KEY || '';
+
 // Para REST environment: 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl }
-export const PARA_ENVIRONMENT = (process.env.PARA_ENVIRONMENT || 'BETA') as 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl: string };
+export type ParaRestEnv = 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl: string };
+
+// @getpara/rest-sdk resolves the API URL via BASE_URLS[env], which only has
+// PROD / BETA / SANDBOX keys — anything else (e.g. "PRODUCTION", "beta",
+// trailing whitespace) makes the client constructor throw "baseUrl is
+// required", which is what took wallet provisioning down in production.
+// Normalize aggressively here so the client can never be built with an
+// unmapped environment value.
+function normalizeParaEnvironment(raw: string | undefined): ParaRestEnv {
+  const value = (raw || '').trim();
+  // A full URL is accepted as an explicit custom base URL.
+  if (/^https?:\/\//i.test(value)) return { baseUrl: value };
+
+  switch (value.toUpperCase()) {
+    case 'PROD':
+    case 'PRODUCTION':
+    case 'LIVE':
+      return 'PROD';
+    case 'SANDBOX':
+    case 'TEST':
+      return 'SANDBOX';
+    case 'BETA':
+    case 'STAGING':
+    case 'DEV':
+    case 'DEVELOPMENT':
+    case '':
+      return 'BETA';
+    default:
+      console.warn(
+        `[env] Unrecognized PARA_ENVIRONMENT '${value}' - defaulting to BETA. ` +
+        `Valid values: PROD, BETA, SANDBOX, or an https:// base URL.`
+      );
+      return 'BETA';
+  }
+}
+
+export const PARA_ENVIRONMENT: ParaRestEnv = normalizeParaEnvironment(process.env.PARA_ENVIRONMENT);
+
+// Optional explicit REST base URL override. Takes precedence over
+// PARA_ENVIRONMENT (e.g. PARA_REST_BASE_URL=https://api.getpara.com).
+export const PARA_REST_BASE_URL = (process.env.PARA_REST_BASE_URL || '').trim();
+
+// Effective environment passed to ParaRestClient.
+export const PARA_REST_ENV: ParaRestEnv = PARA_REST_BASE_URL
+  ? { baseUrl: PARA_REST_BASE_URL }
+  : PARA_ENVIRONMENT;
+
+// True when pointing at Para's production API (used for the go-live warning).
+export const PARA_IS_PROD: boolean =
+  PARA_REST_ENV === 'PROD' ||
+  (typeof PARA_REST_ENV === 'object' && PARA_REST_ENV.baseUrl.replace(/\/+$/, '') === 'https://api.getpara.com');
 export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const CENCORI_API_KEY = process.env.CENCORI_API_KEY || '';
