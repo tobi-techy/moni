@@ -90,12 +90,28 @@ Show: iMessage (or demo CLI) conversation with Moni
 ### 7. Technical Architecture (15 seconds)
 - Spectrum-TS for iMessage infrastructure
 - Para for MPC wallets
-- Cencori (claude-sonnet-4.5) for the agent - tool calling + persisted memory (`.moni-data`)
+- Cencori (gpt-4o-mini) for the agent - tool calling + persisted memory (`.moni-data`)
 - Viem for Base RPC, 1inch for DEX aggregation, Chainlink for price feeds
 - B20 tokenized stocks (AAPL, NVDA, MSFT, TSLA, etc.) on Base
 
 ### 8. Quest Alignment (15 seconds)
 "Built for the Base Builder Quest - uses Coinbase Tokenized Stocks (B20 standard) on Base, demonstrates agentic economy primitives, and makes trading accessible globally via iMessage. Non-US users only, fully compliant."
+
+---
+
+## No-Funding Fallback (record with an empty wallet)
+
+If the wallet is empty (0 USDC / 0 ETH / no B20), execute the swap segment as a **live quote** instead of a broadcast. Moni is live-only, so never fake the trade — show honesty instead. Everything below is $0 and real:
+
+1. **"Hey"** → agent introduces itself.
+2. **"Connect my wallet"** → provisions the real Para MPC wallet and shows the real address `0xe54e…423` (no seed phrases).
+3. **"What's NVDA at?"** → real Chainlink price with the actual timestamp.
+4. **"Quote me buying $50 of AAPL with USDC"** → **real 1inch quote**: amount out, price effect, slippage, gas, TTL. This works with a zero balance and is the strongest shot in the video — a genuine on-chain quote a reviewer can verify.
+5. **Narration:** "That's a live quote from the actual market. Moni can't show a fake balance or a fake trade — it waits until you fund the wallet. Execution needs a little USDC plus a few cents of ETH for gas, and then 'confirm' broadcasts the real swap on Base."
+6. **"Set a price alert when NVDA drops below 950"** / **"Start a $50 weekly DCA into TSLA"** → automation created; the DCA honestly reports "prepared — will execute once funded" (never simulates).
+7. **"What's my portfolio worth?"** → empty-wallet answer stays honest and suggests the funding path.
+
+Closing line for the video: "Every number you've seen is real — live prices, live quotes, a live provisioned wallet. Moni is built so it physically cannot fabricate a trade, which is exactly what you want managing money."
 
 ---
 
@@ -110,7 +126,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 ### Key Features
 1. **iMessage-Native Trading** - Trade by texting; the agent initiates conversations too
 2. **Coinbase Tokenized Stocks (B20)** - 14 tokenized stocks on Base
-3. **Conversational Financial Agent** - Cencori-powered (claude-sonnet-4.5) with tool calling and persistence
+3. **Conversational Financial Agent** - Cencori-powered (gpt-4o-mini) with tool calling and persistence
 4. **Proactive Monitoring** - Unsolicited price/portfolio alerts and daily digest
 5. **Automated Strategies** - DCA auto-execution, stop-loss/take-profit, rebalancing, price alerts
 6. **Real Trade Execution** - 1inch DEX aggregation + Para MPC wallets, with quote-lifetime and slippage guards
@@ -119,7 +135,7 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 ### Technical Stack
 - **iMessage**: Spectrum-TS (Photon) for managed iMessage infrastructure
 - **Wallets**: Para REST SDK (MPC, no private keys in app)
-- **Agent**: Cencori (OpenAI-compatible, claude-sonnet-4.5) + local JSON memory store (`.moni-data`)
+- **Agent**: Cencori (OpenAI-compatible, gpt-4o-mini) + local JSON memory store (`.moni-data`)
 - **Blockchain**: Viem + Base RPC
 - **DEX**: 1inch API for swap aggregation
 - **Prices**: Chainlink Total Return feeds on Base

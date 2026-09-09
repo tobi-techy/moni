@@ -1,4 +1,4 @@
-import { getPortfolio, getTokenPrice, getB20Address, formatUSD, formatBalance, getPublicClient, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { getPortfolio, getTokenPrice, getB20Address, getB20ExplorerLink, formatUSD, formatBalance, getPublicClient, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { analyzePortfolio, PortfolioAnalytics } from './analytics.js';
@@ -111,6 +111,7 @@ export async function get_portfolio(userId: string): Promise<ToolResult> {
         valueUSD: formatUSD(h.valueUSD),
         price: Number(h.price) / 10 ** 8,
         multiplier: Number(h.multiplier) / 10 ** 18,
+        link: getB20ExplorerLink(h.symbol),
       };
     });
 
@@ -700,7 +701,7 @@ export async function get_portfolio_digest(userId: string): Promise<ToolResult> 
     if (analytics.allocation.length > 0) {
       const allocLines = analytics.allocation.map(a => {
         const bar = '█'.repeat(Math.max(1, Math.round(a.percentage / 5)));
-        return `  ${a.symbol.padEnd(6)} ${bar} ${a.percentage.toFixed(1)}%`;
+        return `  ${a.symbol.padEnd(6)} ${bar} ${a.percentage.toFixed(1)}%  (view: ${getB20ExplorerLink(a.symbol as B20TokenSymbol)})`;
       });
       sections.push('📊 Allocation:\n' + allocLines.join('\n'));
     }

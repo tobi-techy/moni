@@ -5,7 +5,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 ## Features
 
 - 📱 **iMessage Native**: Trade via text messages in the Messages app
-- 🤖 **Agentic Assistant**: Cencori-powered agent (claude-sonnet-4.5) with tool calling, memory, and autonomous strategies
+- 🤖 **Agentic Assistant**: Cencori-powered agent (gpt-4o-mini) with tool calling, memory, and autonomous strategies
 - 🔔 **Proactive Monitoring**: Moni initiates conversations - price alerts, stop-loss triggers, daily portfolio digest
 - 💼 **Portfolio Management**: View holdings, track P&L, real-time prices
 - 🔄 **Automated Strategies**: DCA auto-execution, price alerts, stop-loss, take-profit, rebalancing
@@ -82,7 +82,7 @@ The server exposes `GET /health` for uptime checks.
 | `BASE_RPC_FALLBACKS` | No | Comma-separated failover RPC endpoints (defaults to publicnode/1rpc/DRPC) |
 | `ONEINCH_API_KEY` | No | 1inch API key for swap quotes |
 | `CENCORI_API_KEY` | No | Cencori API key for the AI agent |
-| `CENCORI_MODEL` | No | AI model (default: `gpt-4o`) |
+| `CENCORI_MODEL` | No | AI model (default: `gpt-4o-mini`) |
 
 ## Commands
 

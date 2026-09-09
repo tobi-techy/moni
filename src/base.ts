@@ -37,6 +37,12 @@ export function getB20Address(symbol: B20TokenSymbol): Address {
   return B20_TOKENS[symbol];
 }
 
+// On-chain view link for a B20 token (BaseScan contract page). Used so every
+// holding/quote can ship a verifiable link alongside its numbers.
+export function getB20ExplorerLink(symbol: B20TokenSymbol): string {
+  return `https://basescan.org/token/${B20_TOKENS[symbol]}`;
+}
+
 // Get Chainlink price feed address
 export function getPriceFeedAddress(symbol: B20TokenSymbol): Address {
   return CHAINLINK_PRICE_FEEDS[symbol];
@@ -344,6 +350,7 @@ export async function getPortfolio(walletAddress: Address): Promise<Array<{
   price: bigint;
   valueUSD: bigint;
   multiplier: bigint;
+  link: string;
 }>> {
   const symbols = Object.keys(B20_TOKENS) as B20TokenSymbol[];
 
@@ -384,6 +391,7 @@ export async function getPortfolio(walletAddress: Address): Promise<Array<{
           price: priceData?.price || 0n,
           valueUSD,
           multiplier,
+          link: getB20ExplorerLink(symbol),
         };
       } catch (error) {
         console.error(`Portfolio entry failed for ${symbol}:`, error);
@@ -409,6 +417,7 @@ interface PortfolioEntry {
   price: bigint;
   valueUSD: bigint;
   multiplier: bigint;
+  link: string;
 }
 
 // Format balance for display

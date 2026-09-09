@@ -9,7 +9,7 @@ import { startProactiveMonitoring } from './proactive.js';
 import { getUserWalletAddress, resolveParaUser } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
-import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { getPortfolio, getTokenPrice, getB20ExplorerLink, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { B20_DECIMALS } from './constants.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
@@ -223,7 +223,8 @@ function formatPortfolioMessage(portfolio: Awaited<ReturnType<typeof getPortfoli
     
     message += `**${holding.symbol}** (${holding.name})\n`;
     message += `  💎 ${scaledFormatted} shares\n`;
-    message += `  💰 ${valueFormatted}\n\n`;
+    message += `  💰 ${valueFormatted}\n`;
+    message += `  👀 ${holding.link}\n\n`;
   }
 
   message += `**Total Value: ${formatUSD(totalValue)}**`;
@@ -239,7 +240,7 @@ function formatPriceMessage(symbol: B20TokenSymbol, priceData: Awaited<ReturnTyp
   const price = Number(priceData.price) / 10 ** priceData.decimals;
   const updated = new Date(Number(priceData.updatedAt) * 1000).toLocaleTimeString();
   
-  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_`;
+  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_\n👀 ${getB20ExplorerLink(symbol)}`;
 }
 
 // Handle portfolio command
