@@ -8,17 +8,21 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DEMO_MODE=true
+      # Mainnet live trading. Set DEMO_MODE=true for the simulated demo flow
+      # (no RPC, no wallet provisioning). Moni is mainnet-only: a Sepolia RPC
+      # here is rejected at startup.
+      - DEMO_MODE=${DEMO_MODE:-false}
       - NODE_ENV=production
       - PORT=3000
-      # Add your API keys here for local testing with real services
-      # - PROJECT_ID=${PROJECT_ID}
-      # - PROJECT_SECRET=${PROJECT_SECRET}
-      # - PARA_API_KEY=${PARA_API_KEY}
-      # - PARA_ENVIRONMENT=${PARA_ENVIRONMENT}
-      # - BASE_RPC_URL=${BASE_RPC_URL}
-      # - ONEINCH_API_KEY=${ONEINCH_API_KEY}
-      # - LETTA_API_KEY=${LETTA_API_KEY}
+      - BASE_RPC_URL=${BASE_RPC_URL:-https://mainnet.base.org}
+      - BASE_RPC_FALLBACKS=${BASE_RPC_FALLBACKS:-https://base-rpc.publicnode.com,https://1rpc.io/base,https://base.drpc.org}
+      - PARA_ENVIRONMENT=${PARA_ENVIRONMENT:-PROD}
+      - PROJECT_ID=${PROJECT_ID}
+      - PROJECT_SECRET=${PROJECT_SECRET}
+      - PARA_API_KEY=${PARA_API_KEY}
+      - ONEINCH_API_KEY=${ONEINCH_API_KEY}
+      - CENCORI_API_KEY=${CENCORI_API_KEY}
+      - CENCORI_MODEL=${CENCORI_MODEL:-gpt-4o}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -26,27 +30,3 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-
-  # Optional: Run with Spectrum credentials for iMessage testing
-  # moni-imessage:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - DEMO_MODE=false
-  #     - NODE_ENV=production
-  #     - PORT=3000
-  #     - PROJECT_ID=${PROJECT_ID}
-  #     - PROJECT_SECRET=${PROJECT_SECRET}
-#     - PARA_API_KEY=${PARA_API_KEY}
-    #     - PARA_ENVIRONMENT=${PARA_ENVIRONMENT}
-  #     - BASE_RPC_URL=${BASE_RPC_URL}
-  #     - ONEINCH_API_KEY=${ONEINCH_API_KEY}
-  #     - LETTA_API_KEY=${LETTA_API_KEY}
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-  #     interval: 30s
-  #     timeout: 5s
-  #     retries: 3
-  #     start_period: 10s
-  #   restart: unless-stopped

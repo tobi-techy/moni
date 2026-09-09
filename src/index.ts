@@ -10,13 +10,12 @@ import { getUserWalletAddress, getUserWalletClient, resolveParaUser, DEMO_WALLET
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { B20_DECIMALS } from './constants.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
-import { createPublicClient, http, type Address as ViemAddress } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
 
 // Markdown builder that strips em-dashes before the text is captured in the
 // builder closure (spectrum's markdown() bakes the string in at build time).
@@ -80,11 +79,19 @@ function getPhoneFromSpace(space: any): string | undefined {
 // Start health check server for AtlasFlow/container orchestration
 await startHealthServer();
 
-// Validate environment on startup
+// Validate environment on startup. Missing credentials are only fatal in live
+// mode; a testnet RPC (errors[]) is fatal in every mode because the tokenized
+// stocks Moni trades only exist on Base mainnet.
 const envValidation = validateEnv();
-if (!envValidation.valid && DEMO_MODE !== 'true') {
-  log.error('Missing required environment variables', { missing: envValidation.missing });
-  process.exit(1);
+if (!envValidation.valid) {
+  const fatal = DEMO_MODE !== 'true' || envValidation.errors.length > 0;
+  if (fatal) {
+    log.error('Environment validation failed', {
+      missing: envValidation.missing,
+      errors: envValidation.errors,
+    });
+    process.exit(1);
+  }
 }
 
 // User session storage (in production, use Redis or database)
@@ -213,7 +220,7 @@ function formatPortfolioMessage(portfolio: Awaited<ReturnType<typeof getPortfoli
   let message = '📊 **Your Portfolio**\n\n';
 
   for (const holding of portfolio) {
-    const scaledFormatted = formatBalance(holding.scaledBalance, 18);
+    const scaledFormatted = formatBalance(holding.scaledBalance, B20_DECIMALS);
     const valueFormatted = formatUSD(holding.valueUSD);
     totalValue += holding.valueUSD;
     
@@ -320,13 +327,13 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
   if (!quote) {
     await space.send(
       `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
-      `tokenized stocks don't have 1inch liquidity yet. Check prices or your portfolio meanwhile, ` +
+      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile, ` +
       `or run Moni in demo mode to see the full trade flow.`
     );
     return;
   }
 
-  const toAmount = formatAmount(BigInt(quote.toAmount), 18);
+  const toAmount = formatAmount(BigInt(quote.toAmount), B20_DECIMALS);
   
   // Store pending trade
   session.state = 'awaiting_confirmation';
@@ -384,29 +391,29 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
   const portfolio = await getPortfolio(walletAddress);
   const holding = portfolio.find((h: { symbol: string }) => h.symbol === fromToken);
   
-  if (!holding || holding.scaledBalance < parseAmount(amount, 18)) {
-    await space.send(`❌ Insufficient ${fromToken} balance. You have ${formatBalance(holding?.scaledBalance || 0n, 18)}`);
+  if (!holding || holding.scaledBalance < parseAmount(amount, B20_DECIMALS)) {
+    await space.send(`❌ Insufficient ${fromToken} balance. You have ${formatBalance(holding?.scaledBalance || 0n, B20_DECIMALS)}`);
     return;
   }
 
-  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, 18).toString());  
+  const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parseAmount(amount, B20_DECIMALS).toString());  
   if (!quote) {
     await space.send(
       `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
-      `tokenized stocks don't have 1inch liquidity yet. Check prices or your portfolio meanwhile, ` +
+      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile, ` +
       `or run Moni in demo mode to see the full trade flow.`
     );
     return;
   }
 
-  const toAmount = formatAmount(BigInt(quote.toAmount), toToken === 'USDC' ? 6 : 18);
+  const toAmount = formatAmount(BigInt(quote.toAmount), toToken === 'USDC' ? 6 : B20_DECIMALS);
   
   session.state = 'awaiting_confirmation';
   session.pendingTrade = {
     type: 'sell',
     fromToken: fromTokenAddress,
     toToken: toTokenAddress,
-    amount: parseAmount(amount, 18).toString(),
+    amount: parseAmount(amount, B20_DECIMALS).toString(),
   };
 
   await space.send(
@@ -454,8 +461,8 @@ async function handleConfirm(space: any, userId: string) {
     
     await space.send(
       `✅ **Trade Executed (Demo)**\n\n` +
-      `📥 Sent: ${formatAmount(BigInt(amount), fromSymbol === 'USDC' ? 6 : 18)} ${fromSymbol}\n` +
-      `📥 Received: ~${formatAmount(BigInt(amount), toSymbol === 'USDC' ? 6 : 18)} ${toSymbol}\n` +
+      `📥 Sent: ${formatAmount(BigInt(amount), fromSymbol === 'USDC' ? 6 : B20_DECIMALS)} ${fromSymbol}\n` +
+      `📥 Received: ~${formatAmount(BigInt(amount), toSymbol === 'USDC' ? 6 : B20_DECIMALS)} ${toSymbol}\n` +
       `🔗 Tx: 0x${'demo'.padStart(64, '0')}\n\n` +
       `_This was a simulated trade. No real funds moved._`
     );

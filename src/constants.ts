@@ -1,19 +1,22 @@
 import { parseAbi } from 'viem';
 
-// Base Network Configuration
+// Base Network Configuration (mainnet only — B20 tokenized stocks don't exist
+// on Base Sepolia, so the bot is locked to the mainnet chain id 8453).
 export const BASE_CHAIN_ID = 8453;
-export const BASE_SEPOLIA_CHAIN_ID = 84532;
 
 // Base RPC URLs
 export const BASE_MAINNET_RPC = 'https://mainnet.base.org';
-export const BASE_SEPOLIA_RPC = 'https://sepolia.base.org';
-
-// Type for chain ID
-export type ChainId = 8453 | 84532;
 
 // B20 Token Contract Addresses (Mainnet) — Coinbase Tokenized Stocks on Base.
-// These are the official Coinbase B20 contracts (8-decimal ERC-20s). Verified
-// on-chain against mainnet.base.org (decimals() = 8 for each).
+// These are the official Coinbase B20 contracts listed at docs.base.org
+// (Tokenized Stocks on Base). AMZNc/COINc/INTCc were previously the CHAINLINK
+// FEED addresses (those actually live on a different contract).
+// Verified on-chain against mainnet.base.org.
+//
+// B20 tokens are 8-decimal ERC-20s; the multiplier is WAD-scaled (1e18).
+// Confirmed on-chain: decimals() = 8, WAD_PRECISION() = 1e18 (multipler = 1.0
+// as of this check, i.e. no corporate action yet). 1inch lists the same
+// contracts at 8 decimals, so quotes line up with the ERC-20 units.
 export const B20_TOKENS = {
   AAPL: '0xb200000000000000000000C2e324d24d7eEcd1fb',
   NVDA: '0xb20000000000000000000078ee7ce2fE4908108C',
@@ -21,9 +24,9 @@ export const B20_TOKENS = {
   GOOGL: '0xb2000000000000000000002D0BA3164cc74f58B7',
   META: '0xb2000000000000000000008bC8786B856E61707C',
   TSLA: '0xb2000000000000000000001e800a7f5189430cD0',
-  AMZN: '0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295',
-  COIN: '0x408e44f504A7371a345F03a73dDC96A4b48e8aa7',
-  INTC: '0xAB657C39bac0D5886250D70849e2E3E008F2EECB',
+  AMZN: '0xb200000000000000000000d9192b6B456483C2E8',
+  COIN: '0xb200000000000000000000c85a31389D71F3ecfb',
+  INTC: '0xB2000000000000000000004AFF16039bA04bdFBc',
   MSTR: '0xb2000000000000000000004884b426556b92883d',
   CRCL: '0xB20000000000000000000019f6E7C675b73C2e4D',
   SNDK: '0xb200000000000000000000397293Cb8cda9a10c5',
@@ -31,6 +34,10 @@ export const B20_TOKENS = {
 } as const;
 
 export type B20TokenSymbol = keyof typeof B20_TOKENS;
+
+// B20 ERC-20 token decimals. Verified on-chain (decimals() = 8) and used for
+// all live balance/value math. Demo mode separately mocks balances at 18.
+export const B20_DECIMALS = 8;
 
 // Chainlink Price Feed Addresses (Mainnet)
 export const CHAINLINK_PRICE_FEEDS = {

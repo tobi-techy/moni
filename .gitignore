@@ -36,3 +36,4 @@ coverage/
 
 # Local runtime data (Cencori agent memory + conversation history)
 .moni-data/
+.vercel

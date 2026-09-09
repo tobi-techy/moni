@@ -1,5 +1,5 @@
-import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, ONEINCH_SUPPORTED_TOKENS } from './constants.js';
-import { ONEINCH_API_KEY, BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, ONEINCH_SUPPORTED_TOKENS, BASE_CHAIN_ID, B20_DECIMALS } from './constants.js';
+import { ONEINCH_API_KEY, DEMO_MODE } from './env.js';
 
 // 1inch Swap API Integration
 export interface SwapQuote {
@@ -33,7 +33,7 @@ export async function getSwapQuote(
     const mockRate = getMockRate(fromToken, toToken);
     
     // Determine fromToken decimals for proper conversion
-    const fromTokenDecimals = fromToken === '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' ? 6 : 18; // USDC = 6, others = 18
+    const fromTokenDecimals = fromToken === '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' ? 6 : B20_DECIMALS; // USDC = 6, B20 = 8
     const toAmount = (BigInt(amount) * mockRate) / 10n ** BigInt(fromTokenDecimals);
     
     return {
@@ -53,7 +53,7 @@ export async function getSwapQuote(
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/quote?src=${fromToken}&dst=${toToken}&amount=${amount}`;
     
     const response = await fetch(url, {
@@ -66,12 +66,13 @@ export async function getSwapQuote(
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       if (response.status === 400) {
-        // B20 tokenized stocks aren't listed on 1inch, so any USDC<->B20 pair
-        // 400s here. Log the failure clearly so operators can tell — at a
-        // glance — that this is missing liquidity, not a flaky API.
+        // Most B20 stocks ARE listed on 1inch now (AAPL, NVDA, MSFT, GOOGL,
+        // META, TSLA, AMZN, MSTR, SNDK, SPCX), but COIN/INTC/CRCL are not —
+        // pairs involving those get a 400. Log clearly: missing liquidity for
+        // that pair, not a flaky API.
         console.warn(
           `[1inch] 400 quote ${fromToken} -> ${toToken} on chain ${chainId}: ` +
-          `token pair has no 1inch liquidity (B20 stocks aren't tradable there). ` +
+          `token pair has no 1inch liquidity (COIN/INTC/CRCL aren't listed yet). ` +
           `Body: ${body.slice(0, 200)}`
         );
       } else {
@@ -125,7 +126,7 @@ export async function getSwapTransaction(
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
 
     // v6.1 /swap is a GET endpoint. `origin` is the EOA that signs/broadcasts
     // the tx — the Para-managed wallet itself — and must equal `from`.
@@ -192,7 +193,7 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}/price/v1.1/${chainId}/${tokenAddress}?currency=USD`;
     
     const response = await fetch(url, {
@@ -229,7 +230,7 @@ export async function getSupportedTokens(): Promise<Record<string, any> | null> 
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}/token/v1.2/${chainId}`;
     
     const response = await fetch(url, {
@@ -254,16 +255,16 @@ export async function getSupportedTokens(): Promise<Record<string, any> | null> 
 // Mock rates for demo (fromToken -> toToken)
 // Rates are in terms of: 1 fromToken unit (in its native decimals) = rate / 10^toDecimals toToken units
 function getMockRate(fromToken: string, toToken: string): bigint {
-  // Simplified mock rates 
+  // Simplified mock rates (toToken quantities in B20_DECIMALS / USDC 6 units)
   const rates: Record<string, Record<string, bigint>> = {
     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': { // USDC (6 decimals)
-      '0xb200000000000000000000C2e324d24d7eEcd1fb': 5000000000000000n, // USDC -> AAPL (1 AAPL = $200, so 1 USDC = 0.005 AAPL)
-      '0xb20000000000000000000078ee7ce2fE4908108C': 1111111111111111n,   // USDC -> NVDA (1 NVDA = $900, so 1 USDC = 0.00111... NVDA)
+      '0xb200000000000000000000C2e324d24d7eEcd1fb': 500000n, // USDC -> AAPL (1 AAPL = $200, so 1 USDC = 0.005 AAPL = 5e5 units @8)
+      '0xb20000000000000000000078ee7ce2fE4908108C': 111111n,   // USDC -> NVDA (1 NVDA = $900, so 1 USDC = 0.00111... NVDA)
     },
-    '0xb200000000000000000000C2e324d24d7eEcd1fb': { // AAPL (18 decimals)
+    '0xb200000000000000000000C2e324d24d7eEcd1fb': { // AAPL (B20_DECIMALS)
       '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 200000000n, // AAPL -> USDC (1 AAPL = $200, rate = 200 * 1e6 = 2e8)
     },
-    '0xb20000000000000000000078ee7ce2fE4908108C': { // NVDA (18 decimals)
+    '0xb20000000000000000000078ee7ce2fE4908108C': { // NVDA (B20_DECIMALS)
       '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 900000000n, // NVDA -> USDC (1 NVDA = $900, rate = 900 * 1e6 = 9e8)
     },
   };
