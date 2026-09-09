@@ -3,13 +3,14 @@ import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
 import { typing, markdown, richlink, poll, option } from 'spectrum-ts';
 import { sanitizeOutgoingText, sanitizeSpace } from './text.js';
+import { extractBasescanTokenUrls, stripBasescanTokenUrls, pollChoiceToToken } from './rich.js';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { startProactiveMonitoring } from './proactive.js';
 import { getUserWalletAddress, resolveParaUser } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
-import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { getPortfolio, getTokenPrice, getB20ExplorerLink, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { B20_DECIMALS } from './constants.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
@@ -65,37 +66,40 @@ async function sendRich(space: any, builder: any, plain?: string): Promise<void>
 
 // Basescan token URLs (B20 explorer) become platform-native rich-link every
 // time they leave the bot, so an asset's details render as a clean image
-// preview instead of a raw URL bubble. On CLI/plain spaces the URL is sent
-// as text (same information, degraded presentation).
-const BASESCAN_TOKEN_URL_RE = /https:\/\/basescan\.org\/token\/0x[0-9a-fA-F]{40}/g;
-
+// preview instead of a raw URL bubble. CLI/plain spaces keep the original
+// text untouched (the bare URL is the degraded presentation).
 async function sendWithRichLinks(space: any, text: string): Promise<void> {
-  const urls = text.match(BASESCAN_TOKEN_URL_RE) ?? [];
+  if (isCliSpace(space)) {
+    await space.send(text);
+    return;
+  }
+  const urls = extractBasescanTokenUrls(text);
   if (urls.length === 0) {
     await space.send(text);
     return;
   }
-  const cleaned = text
-    .replace(BASESCAN_TOKEN_URL_RE, ' ')
-    .replace(/\s*👀\s*/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const cleaned = stripBasescanTokenUrls(text);
   if (cleaned) await space.send(cleaned);
   for (const url of urls) {
-    if (isCliSpace(space)) await space.send(url);
-    else await space.send(richlink(url));
+    await space.send(richlink(url));
   }
 }
 
 // A tap-to-answer confirmation poll. Plain spaces fall back to the text
 // instruction; the inbound poll_option handler routes the answer back through
 // handleMessage, so the agent replies in both cases.
-function sendConfirmationPoll(space: any, question: string): void {
-  if (isCliSpace(space)) {
-    void space.send(`Reply "confirm" to execute or "cancel" to abort.`);
-    return;
+async function sendConfirmationPoll(space: any, question: string): Promise<void> {
+  const plain = `Reply "confirm" to execute or "cancel" to abort.`;
+  try {
+    if (isCliSpace(space)) {
+      await space.send(plain);
+      return;
+    }
+    await space.send(poll(question, option('Confirm'), option('Cancel')));
+  } catch {
+    // Best-effort: if the poll can't be sent the text instruction still
+    // exists in the quote message the user already saw. No crash.
   }
-  void space.send(poll(question, option('Confirm'), option('Cancel')));
 }
 
 // Best-effort phone number for a chat (kept for future on-ramp/identity use).
@@ -192,8 +196,8 @@ async function sendProactiveMessage(userId: string, message: string): Promise<vo
   try {
     // Belt-and-braces: the stored space is normally already sanitizeSpace-wrapped,
     // but sanitize here too so proactive text is clean regardless of how the
-    // space was stored.
-    await session.space.send(sanitizeOutgoingText(message));
+    // space was stored. Basescan links still become rich cards.
+    await sendWithRichLinks(session.space, sanitizeOutgoingText(message));
   } catch (error) {
     log.error('Failed to send proactive message', { userId, error: (error as Error).message });
   }
@@ -258,7 +262,8 @@ function formatPortfolioMessage(portfolio: Awaited<ReturnType<typeof getPortfoli
     
     message += `**${holding.symbol}** (${holding.name})\n`;
     message += `  💎 ${scaledFormatted} shares\n`;
-    message += `  💰 ${valueFormatted}\n\n`;
+    message += `  💰 ${valueFormatted}\n`;
+    message += `  👀 ${holding.link}\n\n`;
   }
 
   message += `**Total Value: ${formatUSD(totalValue)}**`;
@@ -274,7 +279,7 @@ function formatPriceMessage(symbol: B20TokenSymbol, priceData: Awaited<ReturnTyp
   const price = Number(priceData.price) / 10 ** priceData.decimals;
   const updated = new Date(Number(priceData.updatedAt) * 1000).toLocaleTimeString();
   
-  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_`;
+  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_\n👀 ${getB20ExplorerLink(symbol)}`;
 }
 
 // Handle portfolio command
@@ -381,7 +386,7 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
     `📤 You receive: ~${toAmount} ${toToken}\n` +
     `⛽ Est. gas: ${quote.estimatedGas}`
   );
-  sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
+  await sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
 }
 
 // Handle sell command
@@ -452,7 +457,7 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
     `📤 You receive: ~${toAmount} ${toToken}\n` +
     `⛽ Est. gas: ${quote.estimatedGas}`
   );
-  sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
+  await sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
 }
 
 // Handle confirm
@@ -846,7 +851,7 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
     // confirm/cancel routes straight back into the agent loop as text.
     const pendingQuote = ((await getTradingMemory(userId)) as any).pendingQuote;
     if (pendingQuote?.id && pendingQuote.id !== priorQuoteId) {
-      sendConfirmationPoll(
+      await sendConfirmationPoll(
         space,
         `Execute this ${pendingQuote.fromTokenSymbol ?? ''} → ${pendingQuote.toTokenSymbol ?? ''} swap?`
       );
@@ -862,13 +867,6 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 // A tapped poll answer maps Confirm/Cancel onto the existing confirmation flow
 // and routes everything else to the agent as natural language, so the agent
 // responds back in both cases.
-function pollChoiceToToken(choice: string): string | null {
-  const label = choice.trim().toLowerCase();
-  if (label.includes('confirm') || label === 'yes' || label === 'y') return 'confirm';
-  if (label.includes('cancel') || label === 'no' || label === 'n') return 'cancel';
-  return null;
-}
-
 async function handleInbound(space: any, message: any, userId: string): Promise<void> {
   const content = message?.content;
   if (content?.type === 'text' && content.text) {

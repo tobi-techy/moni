@@ -33,6 +33,16 @@ async function main() {
 
     const { paraIdentifier } = await import('../src/wallet.js');
     result('para identifier: namespaced per user', paraIdentifier(user) === `moni:${user}`);
+
+    const { extractBasescanTokenUrls, stripBasescanTokenUrls, pollChoiceToToken } = await import('../src/rich.js');
+    const tokenUrl = `https://basescan.org/token/0x${'a'.repeat(40)}`;
+    result('rich: extracts basescan token URLs', extractBasescanTokenUrls(`see ${tokenUrl}`).length === 1);
+    result('rich: ignores non-token basescan URLs', extractBasescanTokenUrls('https://basescan.org/tx/0xabcd').length === 0);
+    result('rich: strips URL + eye icon from text', stripBasescanTokenUrls(`💰 $5\n👀 ${tokenUrl}`) === '💰 $5');
+    result('rich: no URL means no change', stripBasescanTokenUrls('plain text') === 'plain text');
+    result('poll: Confirm maps to confirm', pollChoiceToToken('Confirm') === 'confirm');
+    result('poll: Cancel maps to cancel', pollChoiceToToken('Cancel') === 'cancel');
+    result('poll: other choices stay natural language', pollChoiceToToken('Maybe later') === null);
   }
 
   // 2. B20 registry integrity
