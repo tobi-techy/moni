@@ -214,6 +214,46 @@
     }
   }
 
+  /* ── Tally signup modal ─────────────────────────────────────────────── */
+  .tally-modal{
+    position:fixed; inset:0; z-index:100;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+    opacity:0; visibility:hidden;
+    transition:opacity .3s cubic-bezier(.22,1,.36,1), visibility .3s;
+  }
+  .tally-modal.open{ opacity:1; visibility:visible; }
+  .tally-backdrop{
+    position:absolute; inset:0;
+    background:rgba(5,5,5,.82);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  }
+  .tally-sheet{
+    position:relative;
+    width:min(680px, 94vw);
+    height:min(780px, 90dvh);
+    background:#0a0a0a;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:22px;
+    overflow:hidden;
+    box-shadow:0 40px 120px rgba(0,0,0,.6);
+    transform:translateY(16px) scale(.98);
+    transition:transform .35s cubic-bezier(.22,1,.36,1);
+  }
+  .tally-modal.open .tally-sheet{ transform:none; }
+  .tally-sheet iframe{
+    width:100%; height:100%; border:0; display:block;
+  }
+  .tally-close{
+    position:absolute; top:14px; right:14px; z-index:5;
+    width:38px; height:38px; border-radius:999px;
+    background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.16);
+    color:#fff; font-size:20px; line-height:1;
+    cursor:pointer; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  }
+  .tally-close:hover{ background:rgba(255,255,255,.16); }
+
   /* ── Portrait / narrow ─────────────────────────────────────────────── */
   @media (max-aspect-ratio: 11/10){
     :root{
@@ -343,6 +383,17 @@
     </div>
   </main>
 
+  <!-- Tally signup modal -->
+  <div class="tally-modal" id="tallyModal" aria-hidden="true">
+    <div class="tally-backdrop" data-tally-close></div>
+    <div class="tally-sheet" role="dialog" aria-modal="true" aria-label="Join Moni early access">
+      <button class="tally-close" data-tally-close aria-label="Close form">&#10005;</button>
+      <iframe data-tally-src="https://tally.so/embed/WOW7oa"
+        loading="lazy" frameborder="0" marginheight="0" marginwidth="0"
+        title="Join Moni early access"></iframe>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -350,6 +401,8 @@
   var stage = document.getElementById('stage');
   var burger = document.getElementById('burger');
   var menu = document.getElementById('menu');
+  var modal = document.getElementById('tallyModal');
+  var frame = modal.querySelector('iframe');
 
   function setOpen(open) {
     stage.classList.toggle('is-open', open);
@@ -357,6 +410,26 @@
     menu.setAttribute('aria-hidden', String(!open));
     burger.setAttribute('aria-label', open ? 'Close menu' : 'Menu');
   }
+
+  function openTally(e) {
+    if (e) e.preventDefault();
+    if (!frame.getAttribute('src')) frame.setAttribute('src', frame.getAttribute('data-tally-src'));
+    setOpen(false);
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+  function closeTally() {
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  // Every "Start Trading" / "Get Started" pill and the Contact links open the form.
+  document.querySelectorAll('.pill-cta, .pill-nav, a[href="#contact"]').forEach(function (el) {
+    el.addEventListener('click', openTally);
+  });
+  modal.querySelectorAll('[data-tally-close]').forEach(function (el) {
+    el.addEventListener('click', closeTally);
+  });
 
   burger.addEventListener('click', function () {
     setOpen(!stage.classList.contains('is-open'));
@@ -367,7 +440,10 @@
   });
 
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && stage.classList.contains('is-open')) setOpen(false);
+    if (e.key === 'Escape') {
+      if (modal.classList.contains('open')) closeTally();
+      else if (stage.classList.contains('is-open')) setOpen(false);
+    }
   });
 
   window.addEventListener('resize', function () {
