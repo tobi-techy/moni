@@ -126,8 +126,19 @@ export async function getSwapTransaction(
       throw new Error(`1inch API error: ${response.status}`);
     }
 
-    const data = await response.json() as SwapTransaction;
-    return data;
+    // 1inch v6 returns the tx payload nested under `tx`. Unwrap it (and
+    // tolerate a flat response shape) so callers always get a complete,
+    // string-normalized SwapTransaction.
+    const data = await response.json() as any;
+    const t = data?.tx ?? data;
+    return {
+      from: t.from ?? fromAddress,
+      to: t.to,
+      data: t.data,
+      value: String(t.value ?? '0'),
+      gas: String(t.gas ?? t.gasLimit ?? '200000'),
+      gasPrice: String(t.gasPrice ?? '1000000000'),
+    };
   } catch (error) {
     console.error('Error getting swap transaction:', error);
     return null;

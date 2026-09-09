@@ -221,7 +221,7 @@ async function runDemo() {
   console.log('   ✅ Coinbase Tokenized Stocks (B20) on Base');
   console.log('   ✅ Real-time Chainlink price feeds');
   console.log('   ✅ 1inch DEX aggregation for swaps');
-  console.log('   ✅ Embedded wallets via Privy');
+  console.log('   ✅ Agent-driven wallets via Para (MPC, REST signing)');
   console.log('   ✅ Agentic portfolio management (Cencori AI)');
   console.log('   ✅ Automated strategies: DCA, alerts, stop-loss, rebalance');
   console.log('   ✅ Natural language queries');

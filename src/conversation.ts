@@ -228,7 +228,7 @@ export async function ensureWalletConnected(space: any, userId: string): Promise
   const walletAddress = await getUserWalletAddress(userId);
   
   if (!walletAddress) {
-    await space.send("You'll need to connect your wallet first. Send me a message and I'll guide you through it, or use the connect link if you're on desktop.");
+    await space.send("You'll need a wallet before we can do that. Say 'connect me' and I'll provision your on-chain wallet automatically — all set up in the chat, no links.");
     return false;
   }
   

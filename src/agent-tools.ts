@@ -7,7 +7,8 @@ import { checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction, getTransactionHistory } from './history.js';
 import { DEMO_MODE } from './env.js';
-import { type Address, createPublicClient, http } from 'viem';
+import { ERC20_ABI } from './constants.js';
+import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, createPublicClient, http, encodeFunctionData } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { BASE_RPC_URL } from './env.js';
 
@@ -19,6 +20,40 @@ export interface ToolResult<T = any> {
 }
 
 const QUOTE_TTL_MS = 30_000;
+
+// Ensures `spender` (the 1inch router) has allowance to move `amount` of the
+// source token from the Para wallet, sending an approve tx if needed. Returns
+// true when the router is cleared to spend.
+async function ensureApproval(
+  publicClient: Pick<PublicClient, 'readContract' | 'waitForTransactionReceipt'>,
+  walletClient: WalletClient<Transport, Chain, LocalAccount>,
+  token: Address,
+  spender: Address,
+  amount: bigint
+): Promise<boolean> {
+  try {
+    const current = (await publicClient.readContract({
+      address: token,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [walletClient.account!.address, spender],
+    })) as bigint;
+
+    if (current >= amount) return true;
+
+    const data = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: 'approve',
+      args: [spender, amount],
+    });
+    const hash = await walletClient.sendTransaction({ to: token, data });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return receipt.status === 'success';
+  } catch (error) {
+    console.error('Approval failed:', error);
+    return false;
+  }
+}
 
 // Portfolio & Market Data Tools
 export async function get_portfolio(userId: string): Promise<ToolResult> {
@@ -288,14 +323,15 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     // ─── Production mode: real onchain execution ───
     const walletClient = await getUserWalletClient(userId);
     if (!walletClient) {
-      return { success: false, error: 'Could not create wallet client. Check Privy configuration.' };
+      return { success: false, error: 'Could not create wallet client. Check Para configuration.' };
     }
 
     // Get swap transaction data from 1inch
+    const swapFromAmount = freshQuote.fromAmount || fromAmount;
     const swapTx = await getSwapTransaction(
       fromToken,
       toToken,
-      freshQuote.fromAmount || fromAmount,
+      swapFromAmount,
       walletAddress,
       pendingQuote.slippage || 1.0
     );
@@ -306,9 +342,31 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       return { success: false, error: 'Could not get swap transaction data from 1inch.' };
     }
 
-    // Submit transaction via wallet client
+    const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
+    const publicClient = createPublicClient({ chain, transport: http(BASE_RPC_URL) });
+
+    // The 1inch router needs allowance to move the source token (USDC or B20).
+    // Approve first when the existing allowance is insufficient — a required
+    // step for the swap tx that follows. Approve a small buffer above the exact
+    // swap input so rounding dust never reverts the approve.
+    const spender = swapTx.to as Address;
+    const approveAmount = (BigInt(swapFromAmount) * 102n) / 100n;
+    const approved = await ensureApproval(
+      publicClient,
+      walletClient,
+      fromToken as Address,
+      spender,
+      approveAmount
+    );
+    if (!approved) {
+      (memory as any).pendingQuote = undefined;
+      await setTradingMemory(userId, memory as any);
+      return { success: false, error: 'Could not approve the 1inch router to spend the source token.' };
+    }
+
+    // Submit transaction via the Para-backed wallet client: signs through Para
+    // REST (key held in Para's enclave) and broadcasts over the Base RPC.
     const txHash = await walletClient.sendTransaction({
-      account: walletAddress,
       to: swapTx.to as Address,
       data: swapTx.data as `0x${string}`,
       value: BigInt(swapTx.value || '0'),
@@ -318,8 +376,6 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     });
 
     // Wait for transaction confirmation
-    const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
-    const publicClient = createPublicClient({ chain, transport: http(BASE_RPC_URL) });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
     const effectiveToAmount = freshQuote.toAmount || toAmount;

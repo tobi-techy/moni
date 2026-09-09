@@ -22,6 +22,13 @@ async function main() {
   const welcomeMsg = await sendAgentMessage(user, 'help');
   result('help: introduces Moni', /moni/i.test(welcomeMsg), welcomeMsg.slice(0, 80));
 
+  // 1b. Onboarding: Para identifier is deterministic and demo resolution works
+  const { resolveParaUser, DEMO_WALLET_ADDRESS, getUserWalletAddress, paraIdentifier } = await import('../src/wallet.js');
+  result('para identifier: namespaced per user', paraIdentifier(user) === `moni:${user}`, paraIdentifier(user));
+  const resolved = await resolveParaUser(user);
+  result('resolve: finds a demo wallet in DEMO_MODE', resolved?.walletAddress === DEMO_WALLET_ADDRESS, resolved?.walletAddress || 'none');
+  result('wallet address: demo helper returns an address', (await getUserWalletAddress(user)) === DEMO_WALLET_ADDRESS);
+
   // 2. Portfolio
   const portfolio = await sendAgentMessage(user, "What's my portfolio worth?");
   result('portfolio: shows holdings + $ value', /\$\d/.test(portfolio), portfolio.slice(0, 80));

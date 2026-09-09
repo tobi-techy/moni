@@ -1,8 +1,9 @@
 // Centralized environment variable access
 export const PROJECT_ID = process.env.PROJECT_ID || '';
 export const PROJECT_SECRET = process.env.PROJECT_SECRET || '';
-export const PRIVY_APP_ID = process.env.PRIVY_APP_ID || '';
-export const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET || '';
+export const PARA_API_KEY = process.env.PARA_API_KEY || '';
+// Para REST environment: 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl }
+export const PARA_ENVIRONMENT = (process.env.PARA_ENVIRONMENT || 'BETA') as 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl: string };
 export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const CENCORI_API_KEY = process.env.CENCORI_API_KEY || '';
@@ -21,8 +22,7 @@ export function validateEnv(): { valid: boolean; missing: string[] } {
   const required = [
     { key: 'PROJECT_ID', value: PROJECT_ID },
     { key: 'PROJECT_SECRET', value: PROJECT_SECRET },
-    { key: 'PRIVY_APP_ID', value: PRIVY_APP_ID },
-    { key: 'PRIVY_APP_SECRET', value: PRIVY_APP_SECRET },
+    { key: 'PARA_API_KEY', value: PARA_API_KEY },
   ];
 
   const missing = required

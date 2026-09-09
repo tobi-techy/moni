@@ -9,8 +9,8 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 - 🔔 **Proactive Monitoring**: Moni initiates conversations - price alerts, stop-loss triggers, daily portfolio digest
 - 💼 **Portfolio Management**: View holdings, track P&L, real-time prices
 - 🔄 **Automated Strategies**: DCA auto-execution, price alerts, stop-loss, take-profit, rebalancing
-- 💱 **Real Trade Execution**: 1inch DEX aggregation + Privy wallets with quote TTL and slippage guards
-- 🔐 **Embedded Wallets**: Privy-powered wallet abstraction (no seed phrases)
+- 💱 **Real Trade Execution**: 1inch DEX aggregation + Para MPC wallets (auto-approval, REST signing, on-chain broadcast)
+- 🔐 **Embedded Wallets**: Para-powered MPC wallet abstraction (no seed phrases)
 - ⚡ **Base Native**: Direct integration with B20 tokenized stocks (AAPL, NVDA, MSFT, etc.)
 - 🐳 **Deployable**: Docker image, health check endpoint, AtlasFlow-ready
 - 🎯 **Builder Quest Compliant**: Non-US users only, demo mode for safe submission
@@ -21,7 +21,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 
 - Node.js 20+
 - [Photon/Spectrum account](https://app.photon.codes/) for iMessage infrastructure
-- [Privy account](https://privy.io/) for embedded wallets
+- [Para account](https://www.getpara.com/) for MPC wallets
 - [1inch API key](https://portal.1inch.dev/) for DEX aggregation (optional for demo)
 - [Cencori API key](https://cencori.com) for the AI agent (optional for demo)
 
@@ -37,7 +37,7 @@ cp .env.example .env
 
 # Fill in your credentials in .env
 # PROJECT_ID, PROJECT_SECRET from Photon dashboard
-# PRIVY_APP_ID, PRIVY_APP_SECRET from Privy dashboard
+# PARA_API_KEY from Para dashboard
 # BASE_RPC_URL (mainnet or sepolia)
 # ONEINCH_API_KEY (optional, for real swaps)
 # CENCORI_API_KEY (optional, for the AI agent; demo mode doesn't need it)
@@ -76,8 +76,8 @@ The server exposes `GET /health` for uptime checks.
 |----------|----------|-------------|
 | `PROJECT_ID` | Yes | Spectrum project ID from Photon |
 | `PROJECT_SECRET` | Yes | Spectrum project secret |
-| `PRIVY_APP_ID` | Yes | Privy App ID |
-| `PRIVY_APP_SECRET` | Yes | Privy App Secret |
+| `PARA_API_KEY` | Yes | Para API key for MPC wallets |
+| `PARA_ENVIRONMENT` | No | Para env: `PROD`, `BETA`, or `SANDBOX` (default: `BETA`) |
 | `BASE_RPC_URL` | Yes | Base RPC endpoint (mainnet or sepolia) |
 | `ONEINCH_API_KEY` | No | 1inch API key for swap quotes |
 | `CENCORI_API_KEY` | No | Cencori API key for the AI agent |
@@ -98,7 +98,7 @@ The server exposes `GET /health` for uptime checks.
 | `/dca create 50 USDC AAPL weekly` | Create DCA strategy |
 | `/dca list` | List active DCA strategies |
 | `/alert create AAPL above 200` | Create price alert |
-| `/connect` | Connect wallet via Privy |
+| `/connect` | Connect wallet via Para MPC |
 | `/help` | Show all commands |
 
 ## Natural Language
@@ -118,7 +118,7 @@ Moni can also message you first (price alerts, stop-loss hits, daily digest) tha
 iMessage User
     ↓ (Spectrum-TS iMessage Provider)
 Spectrum Agent Server (Node.js/Bun)
-    ├── Privy Wallet Adapter (embedded wallet)
+    ├── Para Wallet Adapter (MPC embedded wallet, REST signing)
     ├── Cencori Agent Core (LLM + tool calling + memory)
     ├── Proactive Monitor (price alerts, DCA auto-exec, digest)
     ├── Base RPC Client (mainnet)
