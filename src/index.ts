@@ -1,15 +1,16 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
-import { typing, markdown } from 'spectrum-ts';
+import { typing, markdown, richlink, poll, option } from 'spectrum-ts';
 import { sanitizeOutgoingText, sanitizeSpace } from './text.js';
+import { extractBasescanTokenUrls, stripBasescanTokenUrls, pollChoiceToToken } from './rich.js';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { startProactiveMonitoring } from './proactive.js';
 import { getUserWalletAddress, resolveParaUser } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
-import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { getPortfolio, getTokenPrice, getB20ExplorerLink, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { B20_DECIMALS } from './constants.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
@@ -61,6 +62,44 @@ async function sendRich(space: any, builder: any, plain?: string): Promise<void>
     return;
   }
   await space.send(builder);
+}
+
+// Basescan token URLs (B20 explorer) become platform-native rich-link every
+// time they leave the bot, so an asset's details render as a clean image
+// preview instead of a raw URL bubble. CLI/plain spaces keep the original
+// text untouched (the bare URL is the degraded presentation).
+async function sendWithRichLinks(space: any, text: string): Promise<void> {
+  if (isCliSpace(space)) {
+    await space.send(text);
+    return;
+  }
+  const urls = extractBasescanTokenUrls(text);
+  if (urls.length === 0) {
+    await space.send(text);
+    return;
+  }
+  const cleaned = stripBasescanTokenUrls(text);
+  if (cleaned) await space.send(cleaned);
+  for (const url of urls) {
+    await space.send(richlink(url));
+  }
+}
+
+// A tap-to-answer confirmation poll. Plain spaces fall back to the text
+// instruction; the inbound poll_option handler routes the answer back through
+// handleMessage, so the agent replies in both cases.
+async function sendConfirmationPoll(space: any, question: string): Promise<void> {
+  const plain = `Reply "confirm" to execute or "cancel" to abort.`;
+  try {
+    if (isCliSpace(space)) {
+      await space.send(plain);
+      return;
+    }
+    await space.send(poll(question, option('Confirm'), option('Cancel')));
+  } catch {
+    // Best-effort: if the poll can't be sent the text instruction still
+    // exists in the quote message the user already saw. No crash.
+  }
 }
 
 // Best-effort phone number for a chat (kept for future on-ramp/identity use).
@@ -157,8 +196,8 @@ async function sendProactiveMessage(userId: string, message: string): Promise<vo
   try {
     // Belt-and-braces: the stored space is normally already sanitizeSpace-wrapped,
     // but sanitize here too so proactive text is clean regardless of how the
-    // space was stored.
-    await session.space.send(sanitizeOutgoingText(message));
+    // space was stored. Basescan links still become rich cards.
+    await sendWithRichLinks(session.space, sanitizeOutgoingText(message));
   } catch (error) {
     log.error('Failed to send proactive message', { userId, error: (error as Error).message });
   }
@@ -223,7 +262,8 @@ function formatPortfolioMessage(portfolio: Awaited<ReturnType<typeof getPortfoli
     
     message += `**${holding.symbol}** (${holding.name})\n`;
     message += `  💎 ${scaledFormatted} shares\n`;
-    message += `  💰 ${valueFormatted}\n\n`;
+    message += `  💰 ${valueFormatted}\n`;
+    message += `  👀 ${holding.link}\n\n`;
   }
 
   message += `**Total Value: ${formatUSD(totalValue)}**`;
@@ -239,7 +279,7 @@ function formatPriceMessage(symbol: B20TokenSymbol, priceData: Awaited<ReturnTyp
   const price = Number(priceData.price) / 10 ** priceData.decimals;
   const updated = new Date(Number(priceData.updatedAt) * 1000).toLocaleTimeString();
   
-  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_`;
+  return `💹 **${symbol} Price**: $${price.toFixed(2)}\n_Updated: ${updated}_\n👀 ${getB20ExplorerLink(symbol)}`;
 }
 
 // Handle portfolio command
@@ -254,7 +294,7 @@ async function handlePortfolio(space: any, userId: string, phone?: string) {
   try {
     const portfolio = await getPortfolio(walletAddress);
     const message = formatPortfolioMessage(portfolio);
-    await space.send(message);
+    await sendWithRichLinks(space, message);
   } catch (error) {
     console.error('Portfolio error:', error);
     await space.send('❌ Error fetching portfolio. Please try again.');
@@ -272,7 +312,7 @@ async function handlePrice(space: any, symbol: string) {
   try {
     const priceData = await getTokenPrice(upperSymbol);
     const message = formatPriceMessage(upperSymbol, priceData);
-    await space.send(message);
+    await sendWithRichLinks(space, message);
   } catch (error) {
     console.error('Price error:', error);
     await space.send('❌ Error fetching price.');
@@ -344,9 +384,9 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
     `✅ **Quote Ready**\n\n` +
     `📥 You send: ${amount} ${fromToken}\n` +
     `📤 You receive: ~${toAmount} ${toToken}\n` +
-    `⛽ Est. gas: ${quote.estimatedGas}\n\n` +
-    `Reply **"confirm"** to execute or **"cancel"** to abort.`
+    `⛽ Est. gas: ${quote.estimatedGas}`
   );
+  await sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
 }
 
 // Handle sell command
@@ -415,9 +455,9 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
     `✅ **Quote Ready**\n\n` +
     `📥 You send: ${amount} ${fromToken}\n` +
     `📤 You receive: ~${toAmount} ${toToken}\n` +
-    `⛽ Est. gas: ${quote.estimatedGas}\n\n` +
-    `Reply **"confirm"** to execute or **"cancel"** to abort.`
+    `⛽ Est. gas: ${quote.estimatedGas}`
   );
+  await sendConfirmationPoll(space, `Execute this ${fromToken} → ${toToken} swap?`);
 }
 
 // Handle confirm
@@ -792,6 +832,10 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
 
   await showTyping(space);
 
+  // Remember any quote that predates this turn so we can tell whether the
+  // agent produced a *new* quote (which gets a tap-to-answer poll).
+  const priorQuoteId = ((await getTradingMemory(userId)) as any).pendingQuote?.id;
+
   // Single intro: the agent writes the welcome itself on first contact (the
   // context block flags it), so no hardcoded greeting is sent here. Sending
   // both was what produced the duplicate intro bubbles.
@@ -800,12 +844,39 @@ async function handleNaturalLanguage(space: any, userId: string, message: string
       walletConnected,
       isFirstContact: firstContact,
     });
-    await space.send(response);
+    await sendWithRichLinks(space, response);
     await hideTyping(space);
+
+    // If this turn produced a fresh quote, attach a tap-to-answer poll so a
+    // confirm/cancel routes straight back into the agent loop as text.
+    const pendingQuote = ((await getTradingMemory(userId)) as any).pendingQuote;
+    if (pendingQuote?.id && pendingQuote.id !== priorQuoteId) {
+      await sendConfirmationPoll(
+        space,
+        `Execute this ${pendingQuote.fromTokenSymbol ?? ''} → ${pendingQuote.toTokenSymbol ?? ''} swap?`
+      );
+    }
   } catch (error) {
     console.error('Agent error:', error);
     await space.send("Sorry, I hit a snag there. Mind trying that again?");
     await hideTyping(space);
+  }
+}
+
+// Normalize any inbound content (text or poll_option) into a chat message.
+// A tapped poll answer maps Confirm/Cancel onto the existing confirmation flow
+// and routes everything else to the agent as natural language, so the agent
+// responds back in both cases.
+async function handleInbound(space: any, message: any, userId: string): Promise<void> {
+  const content = message?.content;
+  if (content?.type === 'text' && content.text) {
+    await handleMessage(space, userId, content.text);
+    return;
+  }
+  if (content?.type === 'poll_option' && content.selected !== false) {
+    const choice = content.option?.title ?? content.title ?? '';
+    await handleMessage(space, userId, pollChoiceToToken(choice) ?? choice);
+    return;
   }
 }
 
@@ -1000,11 +1071,10 @@ if (hasSpectrumCredentials) {
           const result = await app.webhook(
             { body, headers },
             async (space: any, message: any) => {
-              // Handle message (fire-and-forget)
-              if (message.content?.type === 'text' && message.content.text) {
-                const userId = space.user?.id || space.id || 'unknown';
-                await handleMessage(space, userId, message.content.text);
-              }
+              // Handle message (fire-and-forget). Text and poll_option (a
+              // tapped poll answer) both enter the same handler.
+              const userId = space.user?.id || space.id || 'unknown';
+              await handleInbound(space, message, userId);
             }
           );
           
@@ -1042,10 +1112,8 @@ if (hasSpectrumCredentials) {
     
     // @ts-ignore - Spectrum space types
     const userId = space.user?.id || space.id || 'unknown';
-    
-    if (message.content?.type === 'text' && message.content.text) {
-      await handleMessage(space, userId, message.content.text);
-    }
+
+    await handleInbound(space, message, userId);
   }
 } else if (isInteractive) {
   // CLI mode for local interaction without Spectrum credentials (only in interactive TTY)

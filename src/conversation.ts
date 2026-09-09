@@ -21,6 +21,7 @@ export function formatPortfolioHuman(data: any): string {
     const holdingValue = parseUSD(h.valueUSD);
     const pct = totalValueNum > 0 ? Math.round((holdingValue / totalValueNum) * 100) : 0;
     lines.push(`  ${h.symbol}: ${h.shares} shares (${h.valueUSD}, ${pct}%)`);
+    if (h.link) lines.push(`     View: ${h.link}`);
   }
   
   // Add risk insight if concentrated

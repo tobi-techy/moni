@@ -90,8 +90,10 @@ export const BASE_RPC_FALLBACKS: string[] = (
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const CENCORI_API_KEY = process.env.CENCORI_API_KEY || '';
 // Model for live agent turns. NOTE: the model must be one the Cencori plan/key
-// actually supports (e.g. gpt-4o) — claude-sonnet-4.5 is NOT valid on all plans.
-export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gpt-4o';
+// actually supports. Verified reachable on the standard plan: gpt-4o-mini.
+// gpt-4o returns internal_error (circuit opens), google returns
+// pricing_unavailable, claude-sonnet-4.5 returns provider_invalid_request.
+export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gpt-4o-mini';
 // Live transport: 'session' = durable Sessions API (pause/approve for tool calls),
 // 'gateway' = stateless ai.chat (function calling only on plans that support it).
 export const CENCORI_TRANSPORT = process.env.CENCORI_TRANSPORT || 'session';
