@@ -18,12 +18,21 @@
 //      `.moni-data/para-users.json` so resolution is fast and never re-creates.
 
 import { ParaRestClient, ParaRestError, type RestWallet } from '@getpara/rest-sdk';
-import { createWalletClient, http, type WalletClient, type Address, type Chain, type Transport, type LocalAccount } from 'viem';
+import { createWalletClient, http, fallback, type WalletClient, type Address, type Chain, type Transport, type LocalAccount } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { createParaRestViemAccount } from '@getpara/rest-sdk/viem';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
+
+// Failover transport shared by wallet clients. Falls back to community Base
+// RPCs when mainnet.base.org rate-limits (code -32016), so tx broadcasting
+// (approve/swap) keeps working while the public RPC is throttling.
+function getRpcTransport(): Transport {
+  return fallback(
+    [BASE_RPC_URL, ...BASE_RPC_FALLBACKS].map((url) => http(url, { timeout: 15_000 }))
+  );
+}
 
 // Demo wallet address used when DEMO_MODE=true (no Para calls made).
 export const DEMO_WALLET_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
@@ -242,7 +251,7 @@ export async function createUserWalletClient(userId: string): Promise<WalletClie
     return createWalletClient({
       account,
       chain: getBaseChain(),
-      transport: http(BASE_RPC_URL),
+      transport: getRpcTransport(),
     });
   } catch (error) {
     console.error('Error creating Para-backed wallet client:', error);
@@ -283,7 +292,7 @@ export function createWalletClientFromPrivateKey(privateKey: `0x${string}`): Wal
   return createWalletClient({
     account: privateKey,
     chain: getBaseChain(),
-    transport: http(BASE_RPC_URL),
+    transport: getRpcTransport(),
   });
 }
 

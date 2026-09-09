@@ -56,6 +56,16 @@ export const PARA_IS_PROD: boolean =
   PARA_REST_ENV === 'PROD' ||
   (typeof PARA_REST_ENV === 'object' && PARA_REST_ENV.baseUrl.replace(/\/+$/, '') === 'https://api.getpara.com');
 export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+// Community/public Base RPCs used as automatic failover + spread when
+// mainnet.base.org starts rate-limiting (code -32016 "over rate limit").
+// Comma-separated override via env (e.g. for a paid Infura/Alchemy endpoint).
+export const BASE_RPC_FALLBACKS: string[] = (
+  process.env.BASE_RPC_FALLBACKS ||
+  'https://base-rpc.publicnode.com,https://1rpc.io/base,https://base.drpc.org'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const CENCORI_API_KEY = process.env.CENCORI_API_KEY || '';
 // Model for live agent turns. NOTE: the model must be one the Cencori plan/key

@@ -1,6 +1,6 @@
-import { createPublicClient, http, type PublicClient, type Address } from 'viem';
+import { createPublicClient, http, fallback, type PublicClient, type Address } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
-import { BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { BASE_RPC_URL, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
 import { 
   B20_TOKENS, 
   CHAINLINK_PRICE_FEEDS, 
@@ -14,13 +14,23 @@ import {
 export { B20_TOKENS } from './constants.js';
 export type { B20TokenSymbol } from './constants.js';
 
-// Create public client for reading
-function getPublicClient(): PublicClient {
+// Create public client for reading. Cached as a singleton so callers reuse one
+// client, and wrapped in a viem `fallback` transport so a rate-limited or down
+// primary RPC (mainnet.base.org was returning -32016 "over rate limit" under
+// getPortfolio's read burst) automatically fails over to community Base RPCs.
+let client: PublicClient | null = null;
+export function getPublicClient(): PublicClient {
+  if (client) return client;
   const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
-  return createPublicClient({
+  client = createPublicClient({
     chain,
-    transport: http(BASE_RPC_URL),
+    transport: fallback(
+      [BASE_RPC_URL, ...BASE_RPC_FALLBACKS].map((url) =>
+        http(url, { timeout: 15_000 })
+      )
+    ),
   }) as PublicClient;
+  return client;
 }
 
 // Get B20 token contract address
@@ -33,8 +43,18 @@ export function getPriceFeedAddress(symbol: B20TokenSymbol): Address {
   return CHAINLINK_PRICE_FEEDS[symbol];
 }
 
+// Token metadata (name/symbol/decimals) is immutable on-chain — cache it
+// forever per symbol to avoid 3 eth_calls/token on every portfolio refresh.
+export interface TokenMetadata {
+  name: string;
+  symbol: string;
+  decimals: number;
+  address: Address;
+}
+const METADATA_CACHE = new Map<B20TokenSymbol, TokenMetadata>();
+
 // Get token metadata (name, symbol, decimals)
-export async function getTokenMetadata(symbol: B20TokenSymbol) {
+export async function getTokenMetadata(symbol: B20TokenSymbol): Promise<TokenMetadata> {
   if (DEMO_MODE === 'true') {
     return {
       name: `${symbol} Tokenized Stock`,
@@ -43,6 +63,9 @@ export async function getTokenMetadata(symbol: B20TokenSymbol) {
       address: B20_TOKENS[symbol],
     };
   }
+
+  const cached = METADATA_CACHE.get(symbol);
+  if (cached) return cached;
 
   const client = getPublicClient();
   const address = B20_TOKENS[symbol];
@@ -54,12 +77,14 @@ export async function getTokenMetadata(symbol: B20TokenSymbol) {
       client.readContract({ address, abi: B20_ABI, functionName: 'decimals' }),
     ]);
 
-    return {
+    const entry: TokenMetadata = {
       name: name as string,
       symbol: symbolResult as string,
       decimals: decimals as number,
       address,
     };
+    METADATA_CACHE.set(symbol, entry);
+    return entry;
   } catch (error) {
     console.error(`Error fetching metadata for ${symbol}:`, error);
     throw error;
@@ -125,11 +150,17 @@ export async function getScaledBalance(symbol: B20TokenSymbol, walletAddress: Ad
 }
 
 // Get current multiplier
+const MULTIPLIER_TTL_MS = 60_000;
+const MULTIPLIER_CACHE = new Map<B20TokenSymbol, { value: bigint; at: number }>();
+
 export async function getMultiplier(symbol: B20TokenSymbol): Promise<bigint> {
   if (DEMO_MODE === 'true') {
     // Demo: 1.02x multiplier (2% dividend accrual)
     return 102n * (WAD_PRECISION / 100n);
   }
+
+  const cached = MULTIPLIER_CACHE.get(symbol);
+  if (cached && Date.now() - cached.at < MULTIPLIER_TTL_MS) return cached.value;
 
   const client = getPublicClient();
   const address = B20_TOKENS[symbol];
@@ -140,6 +171,7 @@ export async function getMultiplier(symbol: B20TokenSymbol): Promise<bigint> {
       abi: B20_ABI,
       functionName: 'multiplier',
     });
+    MULTIPLIER_CACHE.set(symbol, { value: multiplier as bigint, at: Date.now() });
     return multiplier as bigint;
   } catch (error) {
     console.error(`Error fetching multiplier for ${symbol}:`, error);
@@ -147,8 +179,29 @@ export async function getMultiplier(symbol: B20TokenSymbol): Promise<bigint> {
   }
 }
 
+export interface TokenPrice {
+  price: bigint;
+  updatedAt: bigint;
+  decimals: number;
+}
+
+// Prices are read in several hot paths (portfolio, watchlist, proactive
+// summary) — cache briefly so concurrent callers share one Chainlink read
+// instead of each firing its own eth_calls at the RPC.
+const PRICE_TTL_MS = 15_000;
+const PRICE_CACHE = new Map<B20TokenSymbol, { value: TokenPrice | null; at: number }>();
+
 // Get token price from Chainlink (returns price in USD with 8 decimals)
-export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bigint; updatedAt: bigint; decimals: number } | null> {
+export async function getTokenPrice(symbol: B20TokenSymbol): Promise<TokenPrice | null> {
+  const cached = PRICE_CACHE.get(symbol);
+  if (cached && Date.now() - cached.at < PRICE_TTL_MS) return cached.value;
+
+  const value = await fetchTokenPrice(symbol);
+  PRICE_CACHE.set(symbol, { value, at: Date.now() });
+  return value;
+}
+
+async function fetchTokenPrice(symbol: B20TokenSymbol): Promise<TokenPrice | null> {
   if (DEMO_MODE === 'true') {
     // Demo prices (in USD with 8 decimals)
     const demoPrices: Record<string, bigint> = {
@@ -191,11 +244,11 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bi
       decimals: Number(decimals),
     };
   } catch (error) {
-    // Chainlink has no stock feeds on Base, so source the real market price for
-    // the underlying ticker (Yahoo, keyless) and fall back to a static
-    // reference price if the live source is unreachable or the ticker isn't
-    // listed. (1inch was dropped — B20 token addresses aren't supported by the
-    // 1inch price API, so it only produced 400 errors.)
+    // Most symbols have a live Chainlink feed on Base; when one is missing or
+    // the read fails (rate limit/revert) we fall back to the real underlying
+    // market price (Yahoo, keyless), then to a static reference price if the
+    // live source is unreachable. (1inch was dropped — B20 token addresses
+    // aren't supported by the 1inch price API, so it only produced 400s.)
     const live = await getLiveMarketPrice(symbol);
     if (live) {
       return {
@@ -312,38 +365,69 @@ export async function getPortfolio(walletAddress: Address): Promise<Array<{
   multiplier: bigint;
 }>> {
   const symbols = Object.keys(B20_TOKENS) as B20TokenSymbol[];
-  
-  const portfolio = await Promise.all(
-    symbols.map(async (symbol) => {
-      const [metadata, rawBalance, scaledBalance, priceData, multiplier] = await Promise.all([
-        getTokenMetadata(symbol),
-        getRawBalance(symbol, walletAddress),
-        getScaledBalance(symbol, walletAddress),
-        getTokenPrice(symbol),
-        getMultiplier(symbol),
-      ]);
 
-      // Calculate USD value: (scaledBalance / 10^18) * (priceData.price / 10^8) * 10^8
-      // = scaledBalance * priceData.price / 10^18
-      // Result is in 8-decimal format (matching Chainlink/formatUSD)
-      const valueUSD = priceData 
-        ? (scaledBalance * priceData.price) / 10n ** 18n
-        : 0n;
+  // Run symbol fetches in a small worker pool instead of one giant Promise.all.
+  // Firing all 13 symbols (~13 symbols × 4-6 eth_calls each ≈ 80-100 requests)
+  // at once is what trips the public RPC's rate limiter (-32016). Bounding
+  // concurrency keeps the burst small, and a per-symbol try/catch means one
+  // rate-limited token can never reject the whole portfolio.
+  const CONCURRENCY = 6;
+  const results = new Array(symbols.length).fill(null) as PortfolioEntry[];
+  let cursor = 0;
 
-      return {
-        symbol,
-        name: metadata.name,
-        rawBalance,
-        scaledBalance,
-        price: priceData?.price || 0n,
-        valueUSD,
-        multiplier,
-      };
-    })
+  async function worker(): Promise<void> {
+    while (cursor < symbols.length) {
+      const idx = cursor++;
+      const symbol = symbols[idx];
+      try {
+        const [metadata, rawBalance, scaledBalance, priceData, multiplier] = await Promise.all([
+          getTokenMetadata(symbol),
+          getRawBalance(symbol, walletAddress),
+          getScaledBalance(symbol, walletAddress),
+          getTokenPrice(symbol),
+          getMultiplier(symbol),
+        ]);
+
+        // Calculate USD value: (scaledBalance / 10^18) * (priceData.price / 10^8) * 10^8
+        // = scaledBalance * priceData.price / 10^18
+        // Result is in 8-decimal format (matching Chainlink/formatUSD)
+        const valueUSD = priceData
+          ? (scaledBalance * priceData.price) / 10n ** 18n
+          : 0n;
+
+        results[idx] = {
+          symbol,
+          name: metadata.name,
+          rawBalance,
+          scaledBalance,
+          price: priceData?.price || 0n,
+          valueUSD,
+          multiplier,
+        };
+      } catch (error) {
+        console.error(`Portfolio entry failed for ${symbol}:`, error);
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, symbols.length) }, worker)
   );
 
-  // Filter out zero balances
-  return portfolio.filter(p => p.scaledBalance > 0n);
+  // Filter out failed entries and zero balances
+  return results.filter(
+    (p): p is PortfolioEntry => p !== null && p.scaledBalance > 0n
+  );
+}
+
+interface PortfolioEntry {
+  symbol: B20TokenSymbol;
+  name: string;
+  rawBalance: bigint;
+  scaledBalance: bigint;
+  price: bigint;
+  valueUSD: bigint;
+  multiplier: bigint;
 }
 
 // Format balance for display

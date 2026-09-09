@@ -1,4 +1,4 @@
-import { getPortfolio, getTokenPrice, getB20Address, formatUSD, formatBalance, B20TokenSymbol, B20_TOKENS } from './base.js';
+import { getPortfolio, getTokenPrice, getB20Address, formatUSD, formatBalance, getPublicClient, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
 import { getTradingMemory, setTradingMemory, TradingMemory } from './ai.js';
 import { analyzePortfolio, PortfolioAnalytics } from './analytics.js';
@@ -8,8 +8,7 @@ import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction, getTransactionHistory } from './history.js';
 import { DEMO_MODE } from './env.js';
 import { ERC20_ABI } from './constants.js';
-import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, createPublicClient, http, encodeFunctionData } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
+import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, encodeFunctionData } from 'viem';
 import { BASE_RPC_URL } from './env.js';
 
 // Tool result types
@@ -369,8 +368,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
       return { success: false, error: 'Could not get swap transaction data from 1inch.' };
     }
 
-    const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
-    const publicClient = createPublicClient({ chain, transport: http(BASE_RPC_URL) });
+    const publicClient = getPublicClient();
 
     // The 1inch router needs allowance to move the source token (USDC or B20).
     // Approve first when the existing allowance is insufficient — a required
