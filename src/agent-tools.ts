@@ -6,7 +6,6 @@ import { checkStopLosses, getActiveStopLosses, StopLossConfig } from './automati
 import { checkRebalanceNeeded } from './automation.js';
 import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction, getTransactionHistory } from './history.js';
-import { DEMO_MODE } from './env.js';
 import { ERC20_ABI, B20_DECIMALS } from './constants.js';
 import { BUILDER_CODE_DATA_SUFFIX } from './builder-code.js';
 import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, encodeFunctionData } from 'viem';
@@ -70,14 +69,12 @@ export async function get_wallet_info(userId: string): Promise<ToolResult> {
       };
     }
     const chain = 'Base';
-    const isDemo = DEMO_MODE === 'true';
     return {
       success: true,
       data: {
         address: walletAddress,
         chain,
         explorer: `https://basescan.org/address/${walletAddress}`,
-        ...(isDemo ? { isDemo: true, note: 'Demo mode: this is the demo placeholder wallet. Switch DEMO_MODE=false (with a working Para API key) to get the user\'s real mainnet address.' } : {}),
       }
     };
   } catch (error) {
@@ -319,40 +316,8 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
         error: `Execution aborted: refreshed quote moved ${slippageBps.toFixed(1)} bps against you. Request a new quote.`,
       };
     }
-    if (DEMO_MODE === 'true') {
-      await new Promise(r => setTimeout(r, 1500));
 
-      const tx: Omit<Transaction, 'id'> = {
-        timestamp: Date.now(),
-        type: fromTokenSymbol === 'USDC' ? 'buy' : 'sell',
-        fromToken: fromTokenSymbol,
-        toToken: toTokenSymbol,
-        fromAmount: BigInt(fromAmount),
-        toAmount: BigInt(toAmount),
-        fromAmountFormatted: formatAmount(BigInt(fromAmount), fromTokenSymbol === 'USDC' ? 6 : B20_DECIMALS),
-        toAmountFormatted: formatAmount(BigInt(toAmount), toTokenSymbol === 'USDC' ? 6 : B20_DECIMALS),
-        priceUSD: Number(toAmount) / Number(fromAmount),
-        txHash: `0x${Math.random().toString(16).slice(2).padStart(62, '0')}`,
-        status: 'confirmed',
-        gasUsed: BigInt(pendingQuote.estimatedGas || 150000),
-        gasPrice: 1000000000n,
-      };
-
-      await addTransaction(userId, tx);
-      const freshMemory = await getTradingMemory(userId);
-      (freshMemory as any).pendingQuote = undefined;
-      await setTradingMemory(userId, freshMemory as any);
-
-      return {
-        success: true,
-        data: {
-          transaction: tx,
-          message: `Trade executed (demo): ${tx.fromAmountFormatted} ${tx.fromToken} → ${tx.toAmountFormatted} ${tx.toToken}`
-        }
-      };
-    }
-
-    // ─── Production mode: real onchain execution ───
+    // ─── Real onchain execution ───
     const walletClient = await getUserWalletClient(userId);
     if (!walletClient) {
       return { success: false, error: 'Could not create wallet client. Check Para configuration.' };

@@ -1,5 +1,4 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { DEMO_MODE } from './env.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -7,7 +6,6 @@ interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
   timestamp: string;
   version: string;
-  demoMode: boolean;
   uptime: number;
   checks: {
     env: boolean;
@@ -34,7 +32,6 @@ async function getHealthStatus(): Promise<HealthStatus> {
     status: rpcHealthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version || '1.0.0',
-    demoMode: DEMO_MODE === 'true',
     uptime: Date.now() - startTime,
     checks: {
       env: true, // Basic env validation passed at startup

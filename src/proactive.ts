@@ -5,8 +5,6 @@ import { getPortfolio, formatUSD, B20_TOKENS } from './base.js';
 import { B20_DECIMALS } from './constants.js';
 import { checkPriceAlerts } from './agent-tools.js';
 import { getSwapQuote, parseAmount, formatAmount } from './swap.js';
-import { addTransaction } from './history.js';
-import { DEMO_MODE } from './env.js';
 
 // Proactive monitoring configuration
 const PROACTIVE_INTERVAL_MS = 60000; // 1 minute
@@ -50,9 +48,9 @@ async function runProactiveChecks(
   }
 }
 
-// Default: return demo user (fallback when no callback provided)
+// Default: no user ids (only runs when callers supply an active-user callback).
 function getDefaultUserIds(): string[] {
-  return ['demo-user'];
+  return [];
 }
 
 // Check proactive conditions for a single user
@@ -180,40 +178,16 @@ async function checkDcaStrategies(
       }
 
       const receivedAmount = formatAmount(BigInt(quote.toAmount), B20_DECIMALS);
-      const txHash = DEMO_MODE === 'true'
-        ? `0xdca${Date.now().toString(16).padStart(58, '0')}`
-        : undefined;
 
-      if (txHash) {
-        await addTransaction(userId, {
-          timestamp: now,
-          type: 'dca',
-          fromToken: 'USDC',
-          toToken: tokenSymbol,
-          fromAmount: parsedAmount,
-          toAmount: BigInt(quote.toAmount),
-          fromAmountFormatted: params.amount,
-          toAmountFormatted: receivedAmount,
-          priceUSD: Number(quote.toAmount) / Number(parsedAmount),
-          txHash,
-          status: 'confirmed',
-          gasUsed: 145000n,
-          gasPrice: 1000000000n,
-        });
-
-        params.lastExecuted = now;
-        await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
-
-        await sendMessage(userId,
-          `🔄 DCA executed: ${params.amount} USDC → ${receivedAmount} ${params.token}. ` +
-          `Next ${params.frequency} DCA scheduled. Tx: ${txHash.slice(0, 10)}...`
-        );
-      } else {
-        await sendMessage(userId,
-          `🔄 DCA prepared ${params.amount} USDC → ~${receivedAmount} ${params.token}, ` +
-          `but real execution isn't wired in proactive DCA yet. No transaction was submitted.`
-        );
-      }
+      // Real execute-and-broadcast wiring for proactive DCA isn't in yet — the
+      // strategy is validated + quoted each cycle, and the user is told honestly
+      // that no transaction was submitted rather than showing a fake done state.
+      params.lastExecuted = now;
+      await setTradingMemory(userId, { activeStrategies: memory.activeStrategies });
+      await sendMessage(userId,
+        `🔄 DCA prepared ${params.amount} USDC → ~${receivedAmount} ${params.token}, ` +
+        `but real execution isn't wired in proactive DCA yet. No transaction was submitted.`
+      );
     } catch (error) {
       console.error(`DCA execution failed for ${userId}:`, error);
       await sendMessage(userId,
@@ -251,18 +225,14 @@ export async function sendDailySummary(
 
     for (const holding of portfolio) {
       totalValue += holding.valueUSD;
-      // In production, compare with 24h ago
-      // For demo, simulate
-      const changePct = (Math.random() - 0.5) * 10;
-      const emoji = changePct >= 0 ? '📈' : '📉';
-      changes.push(`${emoji} ${holding.symbol}: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`);
+      changes.push(`${holding.symbol} ${formatUSD(holding.valueUSD)}`);
     }
 
-    const topMovers = changes.slice(0, 3).join(' | ');
+    const topHoldings = changes.slice(0, 3).join(' | ');
     
     await sendMessage(userId,
       `📊 Daily summary: Portfolio worth ${formatUSD(totalValue)}. ` +
-      `Top movers: ${topMovers}. ` +
+      `Top holdings: ${topHoldings}. ` +
       `Reply "details" for full breakdown.`
     );
   } catch (error) {

@@ -9,7 +9,7 @@
 // some plans/providers does not support function calling).
 
 import { Cencori } from 'cencori';
-import { DEMO_MODE, CENCORI_MODEL } from './env.js';
+import { CENCORI_MODEL } from './env.js';
 import { bigintJSONReplacer } from './bigint-json.js';
 import type { ToolName } from './agent-tools.js';
 
@@ -137,10 +137,6 @@ export async function runSessionTurn(
   options: SessionTurnOptions,
   deps: { client?: Cencori; executeTool?: (name: string, args: Record<string, any>) => Promise<any> } = {}
 ): Promise<string> {
-  if (DEMO_MODE === 'true') {
-    throw new FriendlyAgentError("Session transport shouldn't be used in demo mode.");
-  }
-
   const client = deps.client ?? new Cencori();
   const sessions = client.sessions;
 

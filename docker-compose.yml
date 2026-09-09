@@ -8,10 +8,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Mainnet live trading. Set DEMO_MODE=true for the simulated demo flow
-      # (no RPC, no wallet provisioning). Moni is mainnet-only: a Sepolia RPC
-      # here is rejected at startup.
-      - DEMO_MODE=${DEMO_MODE:-false}
+      # Moni is mainnet-only: a Sepolia RPC here is rejected at startup.
       - NODE_ENV=production
       - PORT=3000
       - BASE_RPC_URL=${BASE_RPC_URL:-https://mainnet.base.org}

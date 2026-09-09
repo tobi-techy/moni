@@ -1,5 +1,5 @@
-import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, ONEINCH_SUPPORTED_TOKENS, BASE_CHAIN_ID, B20_DECIMALS } from './constants.js';
-import { ONEINCH_API_KEY, DEMO_MODE } from './env.js';
+import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, BASE_CHAIN_ID, B20_DECIMALS } from './constants.js';
+import { ONEINCH_API_KEY } from './env.js';
 
 // 1inch Swap API Integration
 export interface SwapQuote {
@@ -28,25 +28,6 @@ export async function getSwapQuote(
   amount: string,
   slippage: number = 1.0
 ): Promise<SwapQuote | null> {
-  if (DEMO_MODE === 'true') {
-    // Return mock quote for demo
-    const mockRate = getMockRate(fromToken, toToken);
-    
-    // Determine fromToken decimals for proper conversion
-    const fromTokenDecimals = fromToken === '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' ? 6 : B20_DECIMALS; // USDC = 6, B20 = 8
-    const toAmount = (BigInt(amount) * mockRate) / 10n ** BigInt(fromTokenDecimals);
-    
-    return {
-      fromToken,
-      toToken,
-      fromAmount: amount,
-      toAmount: toAmount.toString(),
-      estimatedGas: '150000',
-      protocols: [],
-      gasPrice: '1000000000', // 1 gwei
-    };
-  }
-
   if (!ONEINCH_API_KEY) {
     console.warn('1inch API key not configured');
     return null;
@@ -108,18 +89,6 @@ export async function getSwapTransaction(
   fromAddress: string,
   slippage: number = 1.0
 ): Promise<SwapTransaction | null> {
-  if (DEMO_MODE === 'true') {
-    // Return mock transaction for demo
-    return {
-      from: fromAddress,
-      to: '0x111111125421ca6dc452d289314280a0f8842a65', // 1inch V6 router
-      data: '0x',
-      value: '0',
-      gas: '150000',
-      gasPrice: '1000000000',
-    };
-  }
-
   if (!ONEINCH_API_KEY) {
     console.warn('1inch API key not configured');
     return null;
@@ -184,10 +153,6 @@ export async function getSwapTransaction(
 
 // Get token price from 1inch Price API (USD per whole token)
 export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price: string; timestamp: number } | null> {
-  if (DEMO_MODE === 'true') {
-    return { price: '100', timestamp: Date.now() };
-  }
-
   if (!ONEINCH_API_KEY) {
     return null;
   }
@@ -221,10 +186,6 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
 
 // Get supported tokens from 1inch
 export async function getSupportedTokens(): Promise<Record<string, any> | null> {
-  if (DEMO_MODE === 'true') {
-    return ONEINCH_SUPPORTED_TOKENS;
-  }
-
   if (!ONEINCH_API_KEY) {
     return null;
   }
@@ -250,26 +211,6 @@ export async function getSupportedTokens(): Promise<Record<string, any> | null> 
     console.error('Error getting supported tokens:', error);
     return null;
   }
-}
-
-// Mock rates for demo (fromToken -> toToken)
-// Rates are in terms of: 1 fromToken unit (in its native decimals) = rate / 10^toDecimals toToken units
-function getMockRate(fromToken: string, toToken: string): bigint {
-  // Simplified mock rates (toToken quantities in B20_DECIMALS / USDC 6 units)
-  const rates: Record<string, Record<string, bigint>> = {
-    '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': { // USDC (6 decimals)
-      '0xb200000000000000000000C2e324d24d7eEcd1fb': 500000n, // USDC -> AAPL (1 AAPL = $200, so 1 USDC = 0.005 AAPL = 5e5 units @8)
-      '0xb20000000000000000000078ee7ce2fE4908108C': 111111n,   // USDC -> NVDA (1 NVDA = $900, so 1 USDC = 0.00111... NVDA)
-    },
-    '0xb200000000000000000000C2e324d24d7eEcd1fb': { // AAPL (B20_DECIMALS)
-      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 200000000n, // AAPL -> USDC (1 AAPL = $200, rate = 200 * 1e6 = 2e8)
-    },
-    '0xb20000000000000000000078ee7ce2fE4908108C': { // NVDA (B20_DECIMALS)
-      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 900000000n, // NVDA -> USDC (1 NVDA = $900, rate = 900 * 1e6 = 9e8)
-    },
-  };
-
-  return rates[fromToken]?.[toToken] || 10n ** 18n;
 }
 
 // Parse amount with decimals

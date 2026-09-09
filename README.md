@@ -13,7 +13,7 @@ An agentic trading application that lets users trade Coinbase Tokenized Stocks (
 - 🔐 **Embedded Wallets**: Para-powered MPC wallet abstraction (no seed phrases)
 - ⚡ **Base Native**: Direct integration with B20 tokenized stocks (AAPL, NVDA, MSFT, etc.)
 - 🐳 **Deployable**: Docker image, health check endpoint, AtlasFlow-ready
-- 🎯 **Builder Quest Compliant**: Non-US users only, demo mode for safe submission
+- 🎯 **Builder Quest Compliant**: Non-US users only, live-mode ready
 
 ## Quick Start
 
@@ -41,8 +41,7 @@ cp .env.example .env
 # BASE_RPC_URL=https://mainnet.base.org (mainnet ONLY — B20 tokenized stocks
 #   don't exist on Base Sepolia, and a testnet RPC is rejected at startup)
 # ONEINCH_API_KEY (optional, for real swaps)
-# CENCORI_API_KEY (optional, for the AI agent; demo mode doesn't need it)
-# DEMO_MODE=true (for the simulated/demo flow)
+# CENCORI_API_KEY (required, for the AI agent)
 ```
 
 ### Development
@@ -84,7 +83,6 @@ The server exposes `GET /health` for uptime checks.
 | `ONEINCH_API_KEY` | No | 1inch API key for swap quotes |
 | `CENCORI_API_KEY` | No | Cencori API key for the AI agent |
 | `CENCORI_MODEL` | No | AI model (default: `gpt-4o`) |
-| `DEMO_MODE` | No | Set to `true` for simulated trades (default: true) |
 
 ## Commands
 
@@ -152,18 +150,17 @@ Spectrum Agent Server (Node.js/Bun)
 
 This project is designed for the Base Builder Quest (deadline: Sep 9, 2026, 11:59pm US Eastern ≈ Sep 10, 4:59am WAT):
 
-1. **Run in demo mode**: `DEMO_MODE=true` (default) - all trades simulated
-2. **Record Loom demo** showing:
+1. **Record Loom demo** showing:
    - Wallet connection via iMessage
    - Portfolio viewing with real B20 prices
    - Trading via text commands
    - Agentic features (DCA, alerts, natural language)
-3. **Submit** via [Google Form](https://docs.google.com/forms/d/e/1FAIpQLSfru57ZLO9AQ-hgWX_G5ZAzmAKkzFLZCyqe5wTyBSwACFX5tg/viewform?usp=send_form) + post Loom on X tagging @buildonbase
+2. **Submit** via [Google Form](https://docs.google.com/forms/d/e/1FAIpQLSfru57ZLO9AQ-hgWX_G5ZAzmAKkzFLZCyqe5wTyBSwACFX5tg/viewform?usp=send_form) + post Loom on X tagging @buildonbase
 
 ## Compliance
 
 - ⚠️ **Non-US users only** - Coinbase Tokenized Stocks are only available in eligible jurisdictions outside the U.S.
-- Demo mode ensures no real funds at risk during quest submission
+- Moni is live-mode only: every balance, price, and trade reflects real on-chain data tied to the user's Para MPC wallet
 - All trades respect B20 policies and compliance requirements
 
 ## License

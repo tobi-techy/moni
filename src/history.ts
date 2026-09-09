@@ -18,67 +18,15 @@ export interface Transaction {
   gasPrice?: bigint;
 }
 
-// Demo transaction history
-const demoTransactions: Transaction[] = [
-  {
-    id: 'tx_1',
-    timestamp: Date.now() - 86400000 * 2,
-    type: 'buy',
-    fromToken: 'USDC',
-    toToken: 'AAPL',
-    fromAmount: 500_000000n,
-    toAmount: 250_000000000000000000n,
-    fromAmountFormatted: '500.00',
-    toAmountFormatted: '2.5',
-    priceUSD: 198.50,
-    txHash: '0xabc123...def456',
-    status: 'confirmed',
-    gasUsed: 145000n,
-    gasPrice: 1000000000n,
-  },
-  {
-    id: 'tx_2',
-    timestamp: Date.now() - 86400000 * 5,
-    type: 'buy',
-    fromToken: 'USDC',
-    toToken: 'NVDA',
-    fromAmount: 1000_000000n,
-    toAmount: 111_111111111111111n,
-    fromAmountFormatted: '1000.00',
-    toAmountFormatted: '1.11',
-    priceUSD: 895.00,
-    txHash: '0xdef456...abc789',
-    status: 'confirmed',
-    gasUsed: 152000n,
-    gasPrice: 1000000000n,
-  },
-  {
-    id: 'tx_3',
-    timestamp: Date.now() - 86400000 * 10,
-    type: 'sell',
-    fromToken: 'MSFT',
-    toToken: 'USDC',
-    fromAmount: 500_000000000000000000n,
-    toAmount: 200_000000n,
-    fromAmountFormatted: '0.5',
-    toAmountFormatted: '200.00',
-    priceUSD: 398.00,
-    txHash: '0x789abc...def012',
-    status: 'confirmed',
-    gasUsed: 138000n,
-    gasPrice: 1000000000n,
-  },
-];
-
 export async function getTransactionHistory(userId: string, limit: number = 20): Promise<Transaction[]> {
   const memory = await getTradingMemory(userId);
-  const history = (memory as any).transactionHistory || demoTransactions;
+  const history = (memory as any).transactionHistory || [];
   return history.slice(0, limit);
 }
 
 export async function addTransaction(userId: string, tx: Omit<Transaction, 'id'>): Promise<Transaction> {
   const memory = await getTradingMemory(userId);
-  const history = (memory as any).transactionHistory || [...demoTransactions];
+  const history = (memory as any).transactionHistory || [];
   
   const newTx: Transaction = {
     ...tx,

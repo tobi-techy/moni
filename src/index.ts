@@ -3,10 +3,10 @@ import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
 import { typing, markdown } from 'spectrum-ts';
 import { sanitizeOutgoingText, sanitizeSpace } from './text.js';
-import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
+import { PROJECT_ID, PROJECT_SECRET, validateEnv, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
-import { startProactiveMonitoring, triggerProactiveCheck, sendDailySummary } from './proactive.js';
-import { getUserWalletAddress, getUserWalletClient, resolveParaUser, DEMO_WALLET_ADDRESS } from './wallet.js';
+import { startProactiveMonitoring } from './proactive.js';
+import { getUserWalletAddress, resolveParaUser } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
@@ -30,7 +30,7 @@ const log = {
 
 // ─── Rich iMessage sends (Spectrum content builders) ────────────────────────
 // Real Spectrum spaces accept ContentBuilder values (markdown, app cards,
-// typing indicators). The CLI demo mock only prints strings, so it's tagged
+// typing indicators). The CLI mock only prints strings, so it's tagged
 // with `_moniCli` and rich sends degrade to their plain-text fallback.
 
 function isCliSpace(space: any): boolean {
@@ -79,19 +79,16 @@ function getPhoneFromSpace(space: any): string | undefined {
 // Start health check server for AtlasFlow/container orchestration
 await startHealthServer();
 
-// Validate environment on startup. Missing credentials are only fatal in live
-// mode; a testnet RPC (errors[]) is fatal in every mode because the tokenized
-// stocks Moni trades only exist on Base mainnet.
+// Validate environment on startup. All credentials are required — Moni is
+// live-only. RPC is locked to Base mainnet because the tokenized stocks Moni
+// trades only exist there (a testnet RPC is fatal).
 const envValidation = validateEnv();
 if (!envValidation.valid) {
-  const fatal = DEMO_MODE !== 'true' || envValidation.errors.length > 0;
-  if (fatal) {
-    log.error('Environment validation failed', {
-      missing: envValidation.missing,
-      errors: envValidation.errors,
-    });
-    process.exit(1);
-  }
+  log.error('Environment validation failed', {
+    missing: envValidation.missing,
+    errors: envValidation.errors,
+  });
+  process.exit(1);
 }
 
 // User session storage (in production, use Redis or database)
@@ -327,8 +324,7 @@ async function handleBuy(space: any, userId: string, args: string[], phone?: str
   if (!quote) {
     await space.send(
       `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
-      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile, ` +
-      `or run Moni in demo mode to see the full trade flow.`
+      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile.`
     );
     return;
   }
@@ -400,8 +396,7 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
   if (!quote) {
     await space.send(
       `❌ **Quote unavailable.** This pair can't be routed on-chain right now — ` +
-      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile, ` +
-      `or run Moni in demo mode to see the full trade flow.`
+      `COIN/INTC/CRCL aren't listed on 1inch. Check prices or your portfolio meanwhile.`
     );
     return;
   }
@@ -425,85 +420,52 @@ async function handleSell(space: any, userId: string, args: string[], phone?: st
   );
 }
 
-// Handle hidden demo trigger: force a proactive check + digest so the
-// "Moni texts you first" moment is reproducible for demos/recordings.
-async function handleDemoProactive(space: any, userId: string) {
-  await space.send('📡 Running monitoring cycle...');
-  const triggered = await triggerProactiveCheck(userId);
-  for (const message of triggered) {
-    await space.send(message);
-  }
-  await sendDailySummary(userId, async (_, message) => {
-    await space.send(message);
-  });
-}
-
 // Handle confirm
 async function handleConfirm(space: any, userId: string) {
   const session = getSession(userId);
   
   if (session.state !== 'awaiting_confirmation' || !session.pendingTrade) {
-    // Agent-created pending quote (demo or LLM-managed) — let the agent resolve it
+    // Agent-created pending quote — let the agent resolve it
     await handleNaturalLanguage(space, userId, 'confirm');
     return;
   }
 
-  const walletClient = await getUserWalletClient(userId);
-  
-  if (DEMO_MODE === 'true') {
-    // Demo mode: simulate trade
-    // Simulate delay
-    await new Promise(r => setTimeout(r, 2000));
-    
+  // Real mode: execute through the Para-backed wallet (REST signing + broadcast).
+  const { execute_trade } = await import('./agent-tools.js');
+  const memory = await getTradingMemory(userId);
+  let pendingQuote = (memory as any).pendingQuote;
+  if (!pendingQuote?.id && session.pendingTrade) {
+    // Slash-command flow (/buy then /confirm) has no LLM quote yet — build a
+    // minimal quote so execute_trade refreshes and executes the real swap.
     const { fromToken, toToken, amount } = session.pendingTrade;
-    const fromSymbol = Object.entries(B20_TOKENS).find(([_, v]) => v === fromToken)?.[0] || 'USDC';
-    const toSymbol = Object.entries(B20_TOKENS).find(([_, v]) => v === toToken)?.[0] || 'USDC';
-    
-    await space.send(
-      `✅ **Trade Executed (Demo)**\n\n` +
-      `📥 Sent: ${formatAmount(BigInt(amount), fromSymbol === 'USDC' ? 6 : B20_DECIMALS)} ${fromSymbol}\n` +
-      `📥 Received: ~${formatAmount(BigInt(amount), toSymbol === 'USDC' ? 6 : B20_DECIMALS)} ${toSymbol}\n` +
-      `🔗 Tx: 0x${'demo'.padStart(64, '0')}\n\n` +
-      `_This was a simulated trade. No real funds moved._`
-    );
+    const now = Date.now();
+    pendingQuote = {
+      id: `slash-${now}`,
+      fromToken,
+      toToken,
+      fromTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === fromToken)?.[0] || 'USDC',
+      toTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === toToken)?.[0] || 'USDC',
+      fromAmount: amount,
+      toAmount: '0',
+      slippage: 1.0,
+      createdAt: now,
+      expiresAt: now + 30_000,
+    };
+    (memory as any).pendingQuote = pendingQuote;
+    await setTradingMemory(userId, memory as any);
+  }
+  if (!pendingQuote?.id) {
+    await space.send('❌ No pending quote to confirm. Ask me for a fresh quote first.');
+    return;
+  }
+  await space.send('⏳ **Executing your trade on Base...**');
+  const res = await execute_trade(userId, pendingQuote.id);
+  if (res.success) {
+    const tx = res.data?.transaction;
+    const msg = res.data?.message || `✅ Trade executed — Tx: ${tx?.txHash ?? 'n/a'}`;
+    await space.send(`✅ **Trade Executed**\n\n${msg}`);
   } else {
-    // Real mode: execute through the Para-backed wallet (REST signing + broadcast).
-    const { execute_trade } = await import('./agent-tools.js');
-    const memory = await getTradingMemory(userId);
-    let pendingQuote = (memory as any).pendingQuote;
-    if (!pendingQuote?.id && session.pendingTrade) {
-      // Slash-command flow (/buy then /confirm) has no LLM quote yet — build a
-      // minimal quote so execute_trade refreshes and executes the real swap.
-      const { fromToken, toToken, amount } = session.pendingTrade;
-      const now = Date.now();
-      pendingQuote = {
-        id: `slash-${now}`,
-        fromToken,
-        toToken,
-        fromTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === fromToken)?.[0] || 'USDC',
-        toTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === toToken)?.[0] || 'USDC',
-        fromAmount: amount,
-        toAmount: '0',
-        slippage: 1.0,
-        createdAt: now,
-        expiresAt: now + 30_000,
-      };
-      (memory as any).pendingQuote = pendingQuote;
-      await setTradingMemory(userId, memory as any);
-    }
-    if (!pendingQuote?.id) {
-      await space.send('❌ No pending quote to confirm. Ask me for a fresh quote first.');
-      return;
-    }
-    await space.send('⏳ **Executing your trade on Base...**');
-    const res = await execute_trade(userId, pendingQuote.id);
-    if (res.success) {
-      const tx = res.data?.transaction;
-      const msg = res.data?.message || `✅ Trade executed — Tx: ${tx?.txHash ?? 'n/a'}`;
-      await space.send(`✅ **Trade Executed**\n\n${msg}`);
-    } else {
-      await space.send(`❌ **Trade failed**\n\n${res.error}`);
-    }
+    await space.send(`❌ **Trade failed**\n\n${res.error}`);
   }
 
   session.state = 'idle';
@@ -762,26 +724,6 @@ async function handleConnect(space: any, userId: string, phone?: string) {
     return;
   }
 
-  if (DEMO_MODE === 'true') {
-    // Demo mode: auto-connect
-    session.walletAddress = DEMO_WALLET_ADDRESS;
-    session.authenticated = true;
-    
-    await showTyping(space);
-    await sendRich(
-      space,
-      md(
-        `**Demo Wallet Connected**\n\n` +
-        `Address: \`${DEMO_WALLET_ADDRESS.slice(0, 6)}...${DEMO_WALLET_ADDRESS.slice(-4)}\`\n\n` +
-        `You're in demo mode — all trades are simulated.\n` +
-        `Try "What's my portfolio worth?" or "Buy $100 of AAPL with USDC"`
-      ),
-      `✅ Demo Wallet Connected — Address: ${DEMO_WALLET_ADDRESS.slice(0, 6)}...${DEMO_WALLET_ADDRESS.slice(-4)}\n\nYou're in demo mode — all trades are simulated.`
-    );
-    await hideTyping(space);
-    return;
-  }
-
   // Real mode: the agent provisions the user's Para EVM wallet automatically
   // (REST wallet, works on Base for every country — no signup needed). The
   // resolve below finds or creates the wallet for this chat.
@@ -880,11 +822,6 @@ async function handleMessage(space: any, userId: string, text: string) {
   console.log('📩 Message received:', JSON.stringify({ userId, text: trimmed }));
 
   // Handle commands
-  if (lower === '/demo' || lower === '/demo alert') {
-    await handleDemoProactive(space, userId);
-    return;
-  }
-
   if (lower.startsWith('/portfolio') || lower.startsWith('/holdings') || lower.startsWith('/balance')) {
     await handlePortfolio(space, userId, phone);
     return;
@@ -1020,9 +957,7 @@ const isInteractive = process.stdin.isTTY;
 
 // Create Spectrum app or run in appropriate mode
 if (hasSpectrumCredentials) {
-  const providers = DEMO_MODE === 'true'
-    ? [imessage.config(), terminal.config()]
-    : [imessage.config(), terminal.config()];
+  const providers = [imessage.config(), terminal.config()];
 
   const app = await Spectrum({
     projectId: PROJECT_ID,
@@ -1031,7 +966,7 @@ if (hasSpectrumCredentials) {
     webhookSecret: SPECTRUM_WEBHOOK_SECRET || undefined,
   });
 
-  log.info('Moni iMessage Trading Agent started', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  log.info('Moni iMessage Trading Agent started', { baseRpc: BASE_RPC_URL });
 
   // Start session cleanup
   cleanupInterval = startSessionCleanup();
@@ -1113,8 +1048,8 @@ if (hasSpectrumCredentials) {
     }
   }
 } else if (isInteractive) {
-  // CLI mode for demo/testing without Spectrum credentials (only in interactive TTY)
-  log.info('Moni Trading Agent (CLI Demo Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  // CLI mode for local interaction without Spectrum credentials (only in interactive TTY)
+  log.info('Moni Trading Agent (CLI Mode)', { baseRpc: BASE_RPC_URL });
   console.log('\nJust chat naturally. Examples:');
   console.log('  "What\'s my portfolio?"');
   console.log('  "Buy $100 of AAPL with USDC"');
@@ -1129,14 +1064,14 @@ if (hasSpectrumCredentials) {
     prompt: 'moni> '
   });
 
-  const demoUserId = 'demo-user';
+  const cliUserId = 'cli-user';
   let space: any = {
     _moniCli: true,
     send: async (text: string) => console.log(`\n${text}\n`),
   };
 
-  // Register demo user session with space for proactive monitoring
-  getSession(demoUserId, space);
+  // Register the CLI session with a space so proactive monitoring can reach it
+  getSession(cliUserId, space);
 
   // Start proactive monitoring in CLI mode too
   startProactiveMonitoring(
@@ -1148,7 +1083,7 @@ if (hasSpectrumCredentials) {
         console.log(`\n📱 [Proactive → ${userId}]: ${message}\n`);
       }
     },
-    () => [demoUserId]
+    () => [cliUserId]
   ).catch(err => {
     log.error('Proactive monitoring failed to start', { error: err.message });
   });
@@ -1163,7 +1098,7 @@ if (hasSpectrumCredentials) {
       process.exit(0);
     }
     if (trimmed) {
-      await handleMessage(space, demoUserId, trimmed);
+      await handleMessage(space, cliUserId, trimmed);
     }
     rl.prompt();
   });
@@ -1174,7 +1109,7 @@ if (hasSpectrumCredentials) {
   });
 } else {
   // Production mode without Spectrum credentials - keep health server running
-  log.info('Moni Trading Agent (Background Mode)', { demoMode: DEMO_MODE, baseRpc: BASE_RPC_URL });
+  log.info('Moni Trading Agent (Background Mode)', { baseRpc: BASE_RPC_URL });
   
   // Start session cleanup
   cleanupInterval = startSessionCleanup();

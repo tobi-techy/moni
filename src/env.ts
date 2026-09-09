@@ -95,7 +95,6 @@ export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gpt-4o';
 // Live transport: 'session' = durable Sessions API (pause/approve for tool calls),
 // 'gateway' = stateless ai.chat (function calling only on plans that support it).
 export const CENCORI_TRANSPORT = process.env.CENCORI_TRANSPORT || 'session';
-export const DEMO_MODE = process.env.DEMO_MODE || 'true';
 export const SPECTRUM_WEBHOOK_SECRET = process.env.SPECTRUM_WEBHOOK_SECRET || '';
 export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3001', 10);
 
@@ -135,17 +134,13 @@ export function validateEnv(): { valid: boolean; missing: string[]; errors: stri
     );
   }
 
-  // In demo mode, Spectrum credentials are optional (for local testing)
-  const isDemo = DEMO_MODE === 'true';
-  const requiredInDemo = missing.filter(k => k !== 'PROJECT_ID' && k !== 'PROJECT_SECRET');
-
-  const valid =
-    errors.length === 0 &&
-    (isDemo ? requiredInDemo.length === 0 : missing.length === 0);
+  // All three credentials are always required — Moni is live-only now (no demo
+// mode), so a missing credential is a configuration error, not a fallback.
+const valid = errors.length === 0 && missing.length === 0;
 
   return {
     valid,
-    missing: isDemo ? requiredInDemo : missing,
+    missing,
     errors,
   };
 }
