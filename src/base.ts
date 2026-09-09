@@ -1,6 +1,5 @@
 import { createPublicClient, http, fallback, type PublicClient, type Address } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
-import { BASE_RPC_URL, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
+import { BASE_RPC_URL, BASE_CHAIN, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
 import { 
   B20_TOKENS, 
   CHAINLINK_PRICE_FEEDS, 
@@ -21,9 +20,8 @@ export type { B20TokenSymbol } from './constants.js';
 let client: PublicClient | null = null;
 export function getPublicClient(): PublicClient {
   if (client) return client;
-  const chain = BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
   client = createPublicClient({
-    chain,
+    chain: BASE_CHAIN,
     transport: fallback(
       [BASE_RPC_URL, ...BASE_RPC_FALLBACKS].map((url) =>
         http(url, { timeout: 15_000 })

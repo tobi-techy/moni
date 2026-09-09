@@ -3,8 +3,9 @@
 // Moni uses @getpara/rest-sdk (Para REST wallets) as its embedded-wallet layer.
 // Para's REST API is the recommended path for server-side / agent wallets: it
 // creates an EVM wallet per user (key material held in Para's enclave, API-key
-// backed) that works on ANY EVM chain — including Base (8453) and Base Sepolia
-// (84532), where Moni's tokenized stocks live.
+// backed) that works on ANY EVM chain — including Base mainnet (8453), where
+// Moni's tokenized stocks live. (Mainnet only: there are no B20 contracts on
+// Base Sepolia.)
 //
 // Flow:
 //   1. resolveParaUser(userId) finds or creates the EVM wallet for an iMessage
@@ -19,11 +20,10 @@
 
 import { ParaRestClient, ParaRestError, type RestWallet } from '@getpara/rest-sdk';
 import { createWalletClient, http, fallback, type WalletClient, type Address, type Chain, type Transport, type LocalAccount } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
 import { createParaRestViemAccount } from '@getpara/rest-sdk/viem';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, BASE_RPC_FALLBACKS, DEMO_MODE } from './env.js';
+import { PARA_API_KEY, PARA_REST_ENV, PARA_IS_PROD, BASE_RPC_URL, BASE_RPC_FALLBACKS, BASE_CHAIN, DEMO_MODE } from './env.js';
 
 // Failover transport shared by wallet clients. Falls back to community Base
 // RPCs when mainnet.base.org rate-limits (code -32016), so tx broadcasting
@@ -225,9 +225,10 @@ export async function resolveParaUser(userId: string): Promise<ParaRecord | null
   }
 }
 
-// Get the appropriate Base chain
+// Get the Base chain. Mainnet only: the B20 tokenized-stock contracts Moni
+// trades only exist on Base mainnet (8453), never on Sepolia.
 export function getBaseChain(): Chain {
-  return BASE_RPC_URL.includes('sepolia') ? baseSepolia : base;
+  return BASE_CHAIN;
 }
 
 // Create a viem wallet client whose account signs through Para REST. Use its

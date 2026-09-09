@@ -9,7 +9,6 @@ import { addTransaction, Transaction, getTransactionHistory } from './history.js
 import { DEMO_MODE } from './env.js';
 import { ERC20_ABI } from './constants.js';
 import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, encodeFunctionData } from 'viem';
-import { BASE_RPC_URL } from './env.js';
 
 // Tool result types
 export interface ToolResult<T = any> {
@@ -65,7 +64,7 @@ export async function get_wallet_info(userId: string): Promise<ToolResult> {
         error: 'Wallet could not be provisioned right now. The wallet service may be misconfigured or briefly unavailable - try again shortly.'
       };
     }
-    const chain = BASE_RPC_URL.includes('sepolia') ? 'Base Sepolia' : 'Base';
+    const chain = 'Base';
     return {
       success: true,
       data: {

@@ -1,4 +1,5 @@
 // Centralized environment variable access
+import { base, type Chain } from 'viem/chains';
 export const PROJECT_ID = process.env.PROJECT_ID || '';
 export const PROJECT_SECRET = process.env.PROJECT_SECRET || '';
 export const PARA_API_KEY = process.env.PARA_API_KEY || '';
@@ -56,6 +57,13 @@ export const PARA_IS_PROD: boolean =
   PARA_REST_ENV === 'PROD' ||
   (typeof PARA_REST_ENV === 'object' && PARA_REST_ENV.baseUrl.replace(/\/+$/, '') === 'https://api.getpara.com');
 export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+// True when the configured RPC points at a testnet. B20 tokenized stocks ONLY
+// exist on Base mainnet — there are no B20 contracts on Base Sepolia — so a
+// testnet RPC is always a misconfiguration and validateEnv() rejects it.
+export const IS_BASE_SEPOLIA = BASE_RPC_URL.toLowerCase().includes('sepolia');
+// The chain Moni reads from and writes to. Locked to Base mainnet because the
+// tokenized-stock contracts this bot trades only exist there (8453).
+export const BASE_CHAIN: Chain = base;
 // Community/public Base RPCs used as automatic failover + spread when
 // mainnet.base.org starts rate-limiting (code -32016 "over rate limit").
 // Comma-separated override via env (e.g. for a paid Infura/Alchemy endpoint).
@@ -79,7 +87,9 @@ export const SPECTRUM_WEBHOOK_SECRET = process.env.SPECTRUM_WEBHOOK_SECRET || ''
 export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3001', 10);
 
 // Validation
-export function validateEnv(): { valid: boolean; missing: string[] } {
+export function validateEnv(): { valid: boolean; missing: string[]; errors: string[] } {
+  const errors: string[] = [];
+
   const required = [
     { key: 'PROJECT_ID', value: PROJECT_ID },
     { key: 'PROJECT_SECRET', value: PROJECT_SECRET },
@@ -90,12 +100,27 @@ export function validateEnv(): { valid: boolean; missing: string[] } {
     .filter(({ value }) => !value)
     .map(({ key }) => key);
 
+  // Mainnet only: there are no B20 tokenized-stock contracts on Base Sepolia,
+  // so pointing the RPC at a testnet can never work — fail fast.
+  if (IS_BASE_SEPOLIA) {
+    errors.push(
+      `BASE_RPC_URL is '${BASE_RPC_URL}' (a testnet). Moni trades Coinbase B20 ` +
+      `tokenized stocks, which only exist on Base mainnet. Set ` +
+      `BASE_RPC_URL=https://mainnet.base.org (or unset it).`
+    );
+  }
+
   // In demo mode, Spectrum credentials are optional (for local testing)
   const isDemo = DEMO_MODE === 'true';
   const requiredInDemo = missing.filter(k => k !== 'PROJECT_ID' && k !== 'PROJECT_SECRET');
-  
+
+  const valid =
+    errors.length === 0 &&
+    (isDemo ? requiredInDemo.length === 0 : missing.length === 0);
+
   return {
-    valid: isDemo ? requiredInDemo.length === 0 : missing.length === 0,
+    valid,
     missing: isDemo ? requiredInDemo : missing,
+    errors,
   };
 }

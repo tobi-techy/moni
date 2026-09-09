@@ -15,8 +15,6 @@ import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, T
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
-import { createPublicClient, http, type Address as ViemAddress } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
 
 // Markdown builder that strips em-dashes before the text is captured in the
 // builder closure (spectrum's markdown() bakes the string in at build time).
@@ -80,11 +78,19 @@ function getPhoneFromSpace(space: any): string | undefined {
 // Start health check server for AtlasFlow/container orchestration
 await startHealthServer();
 
-// Validate environment on startup
+// Validate environment on startup. Missing credentials are only fatal in live
+// mode; a testnet RPC (errors[]) is fatal in every mode because the tokenized
+// stocks Moni trades only exist on Base mainnet.
 const envValidation = validateEnv();
-if (!envValidation.valid && DEMO_MODE !== 'true') {
-  log.error('Missing required environment variables', { missing: envValidation.missing });
-  process.exit(1);
+if (!envValidation.valid) {
+  const fatal = DEMO_MODE !== 'true' || envValidation.errors.length > 0;
+  if (fatal) {
+    log.error('Environment validation failed', {
+      missing: envValidation.missing,
+      errors: envValidation.errors,
+    });
+    process.exit(1);
+  }
 }
 
 // User session storage (in production, use Redis or database)

@@ -1,5 +1,5 @@
-import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, ONEINCH_SUPPORTED_TOKENS } from './constants.js';
-import { ONEINCH_API_KEY, BASE_RPC_URL, DEMO_MODE } from './env.js';
+import { ONEINCH_BASE_URL, ONEINCH_SWAP_V6, ONEINCH_SUPPORTED_TOKENS, BASE_CHAIN_ID } from './constants.js';
+import { ONEINCH_API_KEY, DEMO_MODE } from './env.js';
 
 // 1inch Swap API Integration
 export interface SwapQuote {
@@ -53,7 +53,7 @@ export async function getSwapQuote(
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/quote?src=${fromToken}&dst=${toToken}&amount=${amount}`;
     
     const response = await fetch(url, {
@@ -125,7 +125,7 @@ export async function getSwapTransaction(
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
 
     // v6.1 /swap is a GET endpoint. `origin` is the EOA that signs/broadcasts
     // the tx — the Para-managed wallet itself — and must equal `from`.
@@ -192,7 +192,7 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}/price/v1.1/${chainId}/${tokenAddress}?currency=USD`;
     
     const response = await fetch(url, {
@@ -229,7 +229,7 @@ export async function getSupportedTokens(): Promise<Record<string, any> | null> 
   }
 
   try {
-    const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
+    const chainId = BASE_CHAIN_ID;
     const url = `${ONEINCH_BASE_URL}/token/v1.2/${chainId}`;
     
     const response = await fetch(url, {

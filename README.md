@@ -37,11 +37,12 @@ cp .env.example .env
 
 # Fill in your credentials in .env
 # PROJECT_ID, PROJECT_SECRET from Photon dashboard
-# PARA_API_KEY from Para dashboard
-# BASE_RPC_URL (mainnet or sepolia)
+# PARA_API_KEY from Para dashboard (PARA_ENVIRONMENT=PROD for live)
+# BASE_RPC_URL=https://mainnet.base.org (mainnet ONLY — B20 tokenized stocks
+#   don't exist on Base Sepolia, and a testnet RPC is rejected at startup)
 # ONEINCH_API_KEY (optional, for real swaps)
 # CENCORI_API_KEY (optional, for the AI agent; demo mode doesn't need it)
-# DEMO_MODE=true (for Builder Quest submission)
+# DEMO_MODE=true (for the simulated/demo flow)
 ```
 
 ### Development
@@ -77,11 +78,12 @@ The server exposes `GET /health` for uptime checks.
 | `PROJECT_ID` | Yes | Spectrum project ID from Photon |
 | `PROJECT_SECRET` | Yes | Spectrum project secret |
 | `PARA_API_KEY` | Yes | Para API key for MPC wallets |
-| `PARA_ENVIRONMENT` | No | Para env: `PROD`, `BETA`, or `SANDBOX` (default: `BETA`) |
-| `BASE_RPC_URL` | Yes | Base RPC endpoint (mainnet or sepolia) |
+| `PARA_ENVIRONMENT` | No | Para env, set `PROD` for live mainnet (default: `BETA`) |
+| `BASE_RPC_URL` | Yes | Base RPC endpoint. **Mainnet only** (`https://mainnet.base.org`); a testnet URL is rejected at startup |
+| `BASE_RPC_FALLBACKS` | No | Comma-separated failover RPC endpoints (defaults to publicnode/1rpc/DRPC) |
 | `ONEINCH_API_KEY` | No | 1inch API key for swap quotes |
 | `CENCORI_API_KEY` | No | Cencori API key for the AI agent |
-| `CENCORI_MODEL` | No | AI model (default: `claude-sonnet-4.5`) |
+| `CENCORI_MODEL` | No | AI model (default: `gpt-4o`) |
 | `DEMO_MODE` | No | Set to `true` for simulated trades (default: true) |
 
 ## Commands
