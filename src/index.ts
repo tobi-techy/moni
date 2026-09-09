@@ -1,11 +1,11 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Spectrum } from 'spectrum-ts';
 import { imessage, terminal } from 'spectrum-ts/providers';
-import { typing } from 'spectrum-ts';
+import { typing, markdown } from 'spectrum-ts';
 import { PROJECT_ID, PROJECT_SECRET, validateEnv, DEMO_MODE, SPECTRUM_WEBHOOK_SECRET, WEBHOOK_PORT } from './env.js';
 import { BASE_RPC_URL } from './env.js';
 import { startProactiveMonitoring, triggerProactiveCheck, sendDailySummary } from './proactive.js';
-import { getUserWalletAddress, getUserWalletClient, registerWallet } from './wallet.js';
+import { getUserWalletAddress, getUserWalletClient, resolveParaUser, DEMO_WALLET_ADDRESS } from './wallet.js';
 import { startHealthServer } from './health.js';
 import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
@@ -23,6 +23,54 @@ const log = {
   warn: (msg: string, meta?: Record<string, any>) => console.warn(JSON.stringify({ level: 'warn', msg, ...meta, timestamp: new Date().toISOString() })),
   error: (msg: string, meta?: Record<string, any>) => console.error(JSON.stringify({ level: 'error', msg, ...meta, timestamp: new Date().toISOString() })),
 };
+
+// ─── Rich iMessage sends (Spectrum content builders) ────────────────────────
+// Real Spectrum spaces accept ContentBuilder values (markdown, app cards,
+// typing indicators). The CLI demo mock only prints strings, so it's tagged
+// with `_moniCli` and rich sends degrade to their plain-text fallback.
+
+function isCliSpace(space: any): boolean {
+  return !!(space && (space as any)._moniCli);
+}
+
+async function showTyping(space: any): Promise<void> {
+  if (isCliSpace(space)) return;
+  try {
+    await space.send(typing());
+  } catch {
+    /* best effort */
+  }
+}
+
+async function hideTyping(space: any): Promise<void> {
+  if (isCliSpace(space)) return;
+  try {
+    await space.send(typing('stop'));
+  } catch {
+    /* best effort */
+  }
+}
+
+async function sendRich(space: any, builder: any, plain?: string): Promise<void> {
+  if (isCliSpace(space)) {
+    await space.send(plain ?? '');
+    return;
+  }
+  await space.send(builder);
+}
+
+// Best-effort phone number for a chat (kept for future on-ramp/identity use).
+function getPhoneFromSpace(space: any): string | undefined {
+  const address = space?.user?.address;
+  if (typeof address === 'string' && (address.startsWith('+') || /^\d{7,15}$/.test(address))) {
+    return address;
+  }
+  const id = space?.user?.id ?? space?.id;
+  if (typeof id === 'string' && id.startsWith('+')) {
+    return id;
+  }
+  return undefined;
+}
 
 // Start health check server for AtlasFlow/container orchestration
 await startHealthServer();
@@ -49,6 +97,8 @@ interface UserSession {
   tradingMemory: TradingMemory;
   lastActive: number;
   space?: any;
+  /** True once we've tried resolution for a messaging-only session (rate-limit guard). */
+  resolutionAttempted?: boolean;
 }
 
 const userSessions = new Map<string, UserSession>();
@@ -129,14 +179,14 @@ function startSessionCleanup(): NodeJS.Timeout {
 }
 
 // Initialize wallet for user
-async function initializeWallet(userId: string): Promise<Address | null> {
+async function initializeWallet(userId: string, phone?: string): Promise<Address | null> {
   const session = getSession(userId);
   
   if (session.walletAddress) {
     return session.walletAddress;
   }
 
-  const walletAddress = await getUserWalletAddress(userId);
+  const walletAddress = await getUserWalletAddress(userId, { phone });
   if (walletAddress) {
     session.walletAddress = walletAddress;
     session.authenticated = true;
@@ -181,8 +231,8 @@ function formatPriceMessage(symbol: B20TokenSymbol, priceData: Awaited<ReturnTyp
 }
 
 // Handle portfolio command
-async function handlePortfolio(space: any, userId: string) {
-  const walletAddress = await initializeWallet(userId);
+async function handlePortfolio(space: any, userId: string, phone?: string) {
+  const walletAddress = await initializeWallet(userId, phone);
   
   if (!walletAddress) {
     await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
@@ -218,9 +268,9 @@ async function handlePrice(space: any, symbol: string) {
 }
 
 // Handle buy command
-async function handleBuy(space: any, userId: string, args: string[]) {
+async function handleBuy(space: any, userId: string, args: string[], phone?: string) {
   const session = getSession(userId);
-  const walletAddress = await initializeWallet(userId);
+  const walletAddress = await initializeWallet(userId, phone);
   
   if (!walletAddress) {
     await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
@@ -285,9 +335,9 @@ async function handleBuy(space: any, userId: string, args: string[]) {
 }
 
 // Handle sell command
-async function handleSell(space: any, userId: string, args: string[]) {
+async function handleSell(space: any, userId: string, args: string[], phone?: string) {
   const session = getSession(userId);
-  const walletAddress = await initializeWallet(userId);
+  const walletAddress = await initializeWallet(userId, phone);
   
   if (!walletAddress) {
     await space.send('🔐 Please connect your wallet first. Send "/connect" to get started.');
@@ -394,8 +444,43 @@ async function handleConfirm(space: any, userId: string) {
       `_This was a simulated trade. No real funds moved._`
     );
   } else {
-    // Real trade execution would go here
-    await space.send('⚠️ Real trading not yet implemented. Set DEMO_MODE=false and configure 1inch API.');
+    // Real mode: execute through the Para-backed wallet (REST signing + broadcast).
+    const { execute_trade } = await import('./agent-tools.js');
+    const memory = await getTradingMemory(userId);
+    let pendingQuote = (memory as any).pendingQuote;
+    if (!pendingQuote?.id && session.pendingTrade) {
+      // Slash-command flow (/buy then /confirm) has no LLM quote yet — build a
+      // minimal quote so execute_trade refreshes and executes the real swap.
+      const { fromToken, toToken, amount } = session.pendingTrade;
+      const now = Date.now();
+      pendingQuote = {
+        id: `slash-${now}`,
+        fromToken,
+        toToken,
+        fromTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === fromToken)?.[0] || 'USDC',
+        toTokenSymbol: Object.entries(B20_TOKENS).find(([_, v]) => v === toToken)?.[0] || 'USDC',
+        fromAmount: amount,
+        toAmount: '0',
+        slippage: 1.0,
+        createdAt: now,
+        expiresAt: now + 30_000,
+      };
+      (memory as any).pendingQuote = pendingQuote;
+      await setTradingMemory(userId, memory as any);
+    }
+    if (!pendingQuote?.id) {
+      await space.send('❌ No pending quote to confirm. Ask me for a fresh quote first.');
+      return;
+    }
+    await space.send('⏳ **Executing your trade on Base...**');
+    const res = await execute_trade(userId, pendingQuote.id);
+    if (res.success) {
+      const tx = res.data?.transaction;
+      const msg = res.data?.message || `✅ Trade executed — Tx: ${tx?.txHash ?? 'n/a'}`;
+      await space.send(`✅ **Trade Executed**\n\n${msg}`);
+    } else {
+      await space.send(`❌ **Trade failed**\n\n${res.error}`);
+    }
   }
 
   session.state = 'idle';
@@ -636,73 +721,122 @@ async function handleHelp(space: any) {
 }
 
 // Handle connect
-async function handleConnect(space: any, userId: string, arg?: string) {
+async function handleConnect(space: any, userId: string, phone?: string) {
   const session = getSession(userId);
 
   if (session.authenticated && session.walletAddress) {
-    await space.send(
-      `You're all set — wallet ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)} is connected. ` +
-      `Want to see your portfolio or check a price?`
+    await showTyping(space);
+    await sendRich(
+      space,
+      markdown(
+        `**Wallet Connected**\n\n` +
+        `Address: \`${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\`\n\n` +
+        `You're all set — want to see your portfolio or check a price?`
+      ),
+      `✅ Wallet Connected — Address: ${session.walletAddress.slice(0, 6)}...${session.walletAddress.slice(-4)}\n\nYou're all set — want to see your portfolio or check a price?`
     );
+    await hideTyping(space);
     return;
   }
 
   if (DEMO_MODE === 'true') {
     // Demo mode: auto-connect
-    const demoAddress = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' as Address;
-    session.walletAddress = demoAddress;
+    session.walletAddress = DEMO_WALLET_ADDRESS;
     session.authenticated = true;
-
-    await space.send(
-      `You're connected (demo wallet ${demoAddress.slice(0, 6)}...${demoAddress.slice(-4)}). ` +
-      `Trades are simulated here, so feel free to try one — say "buy $500 of AAPL".`
+    
+    await showTyping(space);
+    await sendRich(
+      space,
+      markdown(
+        `**Demo Wallet Connected**\n\n` +
+        `Address: \`${DEMO_WALLET_ADDRESS.slice(0, 6)}...${DEMO_WALLET_ADDRESS.slice(-4)}\`\n\n` +
+        `You're in demo mode — all trades are simulated.\n` +
+        `Try "What's my portfolio worth?" or "Buy $100 of AAPL with USDC"`
+      ),
+      `✅ Demo Wallet Connected — Address: ${DEMO_WALLET_ADDRESS.slice(0, 6)}...${DEMO_WALLET_ADDRESS.slice(-4)}\n\nYou're in demo mode — all trades are simulated.`
     );
+    await hideTyping(space);
     return;
   }
 
-  // Real mode: register the Privy identity the user authenticated with.
-  const privyUserId = arg?.startsWith('did:privy:') ? arg : undefined;
-  const walletAddress = !privyUserId && arg && /^0x[a-fA-F0-9]{40}$/.test(arg) ? arg : undefined;
-
-  if (privyUserId || walletAddress) {
-    await registerWallet(userId, privyUserId ? { privyUserId } : { walletAddress: walletAddress as Address });
-    const resolved = await getUserWalletAddress(userId);
-    if (resolved) {
-      session.walletAddress = resolved;
+  // Real mode: the agent provisions the user's Para EVM wallet automatically
+  // (REST wallet, works on Base for every country — no signup needed). The
+  // resolve below finds or creates the wallet for this chat.
+  try {
+    const record = await resolveParaUser(userId);
+    if (record?.walletAddress) {
+      session.walletAddress = record.walletAddress;
       session.authenticated = true;
-      await space.send(
-        `Got it — your wallet ${resolved.slice(0, 6)}...${resolved.slice(-4)} is connected. ` +
-        `Want to see your portfolio or check a price?`
+      await sendRich(
+        space,
+        markdown(
+          `**Wallet Connected**\n\n` +
+          `Address: \`${record.walletAddress.slice(0, 6)}...${record.walletAddress.slice(-4)}\`\n\n` +
+          `Your on-chain wallet was created for you and your profile is linked — all set to trade.`
+        ),
+        `✅ Wallet Connected — Address: ${record.walletAddress.slice(0, 6)}...${record.walletAddress.slice(-4)}`
       );
       return;
     }
-    await space.send("I saved that, but couldn't resolve a wallet from it yet. Double-check the address and try again.");
-    return;
+  } catch (error) {
+    log.warn('Para resolve failed during connect', { userId, error: (error as Error).message });
   }
 
-  await space.send(
-    `To connect, authenticate with Privy, then send me your Privy user id (starts with did:privy:) or your wallet address, like: /connect 0xYourWalletAddress`
+  // Provisioning failed (e.g., Para API key missing) — surface it so the
+  // setup doesn't silently stall.
+  await showTyping(space);
+  await sendRich(
+    space,
+    markdown(
+      `**Wallet setup needs attention**\n\n` +
+      `I couldn't create your on-chain wallet just now — it's handled automatically server-side, so nothing for you to do. My devs should check the Para credentials, then try /connect again.`
+    ),
+    `❌ Couldn't create your wallet — check Para credentials, then send /connect again.`
   );
+  await hideTyping(space);
 }
 
 // Natural language handling via the Moni agent
-async function handleNaturalLanguage(space: any, userId: string, message: string) {
+async function handleNaturalLanguage(space: any, userId: string, message: string, phone?: string) {
   const session = getSession(userId);
   const firstContact = await isFirstContact(userId);
+  let walletConnected = !!(session.authenticated && session.walletAddress);
+
+  // Provision the user's Para EVM wallet automatically on first contact (REST
+// wallet, country-agnostic — no signup needed). Resolution is cached and
+// persisted after the first success, and guarded so a missing config doesn't
+// retry the network on every message.
+  if (!walletConnected && !session.resolutionAttempted) {
+    session.resolutionAttempted = true;
+    try {
+      const record = await resolveParaUser(userId);
+      if (record?.walletAddress) {
+        session.walletAddress = record.walletAddress;
+        session.authenticated = true;
+        walletConnected = true;
+      }
+    } catch (error) {
+      log.warn('Para resolve failed during dialogue', { userId, error: (error as Error).message });
+    }
+  }
+
+  await showTyping(space);
 
   if (firstContact) {
-    await space.send(buildWelcomeMessage(session.authenticated && !!session.walletAddress));
+    await space.send(buildWelcomeMessage(walletConnected));
   }
 
   try {
     const response = await sendAgentMessage(userId, message, {
-      walletConnected: !!(session.authenticated && session.walletAddress),
+      walletConnected,
       isFirstContact: firstContact,
     });
     await space.send(response);
+    await hideTyping(space);
   } catch (error) {
     console.error('Agent error:', error);
     await space.send("Sorry, I hit a snag there. Mind trying that again?");
+    await hideTyping(space);
   }
 }
 
@@ -714,7 +848,7 @@ function buildWelcomeMessage(walletConnected: boolean): string {
     "or say something like \"buy $500 of AAPL\".";
 
   if (!walletConnected) {
-    message += " One thing first — I'll need your wallet connected to see your holdings. Just say \"connect\" when you're ready.";
+    message += '\nI couldn\'t provision your wallet yet — say something else and I\'ll try again on the spot.\n';
   }
 
   message += " What's on your mind?";
@@ -726,6 +860,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   const session = getSession(userId, space);
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
+  const phone = getPhoneFromSpace(space);
   console.log('📩 Message received:', JSON.stringify({ userId, text: trimmed }));
 
   // Handle commands
@@ -735,7 +870,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   }
 
   if (lower.startsWith('/portfolio') || lower.startsWith('/holdings') || lower.startsWith('/balance')) {
-    await handlePortfolio(space, userId);
+    await handlePortfolio(space, userId, phone);
     return;
   }
   
@@ -747,13 +882,13 @@ async function handleMessage(space: any, userId: string, text: string) {
   
   if (lower.startsWith('/buy ')) {
     const args = trimmed.split(' ').slice(1);
-    await handleBuy(space, userId, args);
+    await handleBuy(space, userId, args, phone);
     return;
   }
   
   if (lower.startsWith('/sell ')) {
     const args = trimmed.split(' ').slice(1);
-    await handleSell(space, userId, args);
+    await handleSell(space, userId, args, phone);
     return;
   }
   
@@ -816,7 +951,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   }
   
   if (lower === '/connect' || lower === '/wallet' || lower === '/login') {
-    await handleConnect(space, userId, trimmed.split(' ')[1]);
+    await handleConnect(space, userId, phone);
     return;
   }
   
@@ -826,7 +961,7 @@ async function handleMessage(space: any, userId: string, text: string) {
   }
 
   // Default: natural language processing via the Moni agent
-  await handleNaturalLanguage(space, userId, text);
+  await handleNaturalLanguage(space, userId, text, phone);
 }
 
 // Graceful shutdown handler
@@ -980,6 +1115,7 @@ if (hasSpectrumCredentials) {
 
   const demoUserId = 'demo-user';
   let space: any = {
+    _moniCli: true,
     send: async (text: string) => console.log(`\n${text}\n`),
   };
 

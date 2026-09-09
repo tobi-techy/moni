@@ -88,8 +88,8 @@ export const CHAINLINK_AGGREGATOR_ABI = [
 export const WAD_PRECISION = 10n ** 18n;
 
 // 1inch API Base URLs
-export const ONEINCH_BASE_URL = 'https://api.1inch.dev';
-export const ONEINCH_SWAP_V6 = '/swap/v6.0';
+export const ONEINCH_BASE_URL = 'https://api.1inch.com';
+export const ONEINCH_SWAP_V6 = '/swap/v6.1';
 export const ONEINCH_PRICE_V1 = '/price/v1.1';
 
 // Supported tokens for 1inch (Base mainnet)

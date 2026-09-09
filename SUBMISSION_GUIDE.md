@@ -8,7 +8,7 @@
 - [x] **Uses Coinbase Tokenized Stocks (B20) on Base** - Direct integration with AAPL, NVDA, MSFT, etc.
 - [x] **Innovative iMessage interface** - Native blue-bubble trading experience
 - [x] **Agentic capabilities** - Cencori-powered agent with memory, proactive alerts, DCA auto-execution, stop-loss, rebalancing
-- [x] **Real trade execution** - 1inch + Privy swap path (quote TTL, stale-quote and slippage guards), simulated in demo mode
+- [x] **Real trade execution** - 1inch + Para MPC swap path (quote TTL, stale-quote and slippage guards), simulated in demo mode
 - [x] **Demo mode ready** - Safe for quest submission (no real funds at risk, no API keys needed)
 - [x] **Non-US user compliant** - Quest requirement met
 
@@ -59,9 +59,9 @@ Show: iMessage (or demo CLI) conversation with Moni
 
 ### 2. Wallet Connection (30 seconds)
 - Text `/connect` (or simply ask "connect my wallet")
-- Show demo wallet connected instantly via Privy embedded wallet
+- Show demo wallet connected instantly via Para MPC wallet
 - No seed phrases, no browser extensions
-- "This uses Privy's embedded wallet infrastructure - users authenticate with email/social, get a wallet instantly"
+- "This uses Para's MPC wallet infrastructure - wallets are provisioned automatically server-side, transactions are signed via Para REST and broadcast on Base"
 
 ### 3. Chat Naturally (45 seconds)
 - Ask: "What's my portfolio worth?"
@@ -90,7 +90,7 @@ Show: iMessage (or demo CLI) conversation with Moni
 
 ### 7. Technical Architecture (15 seconds)
 - Spectrum-TS for iMessage infrastructure
-- Privy for embedded wallets
+- Para for MPC wallets
 - Cencori (claude-sonnet-4.5) for the agent - tool calling + persisted memory (`.moni-data`)
 - Viem for Base RPC, 1inch for DEX aggregation, Chainlink for price feeds
 - B20 tokenized stocks (AAPL, NVDA, MSFT, TSLA, etc.) on Base
@@ -114,12 +114,12 @@ Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B2
 3. **Conversational Financial Agent** - Cencori-powered (claude-sonnet-4.5) with tool calling and persistence
 4. **Proactive Monitoring** - Unsolicited price/portfolio alerts and daily digest
 5. **Automated Strategies** - DCA auto-execution, stop-loss/take-profit, rebalancing, price alerts
-6. **Real Trade Execution** - 1inch DEX aggregation + Privy embedded wallets, with quote-lifetime and slippage guards (simulated in demo mode)
+6. **Real Trade Execution** - 1inch DEX aggregation + Para MPC wallets, with quote-lifetime and slippage guards (simulated in demo mode)
 7. **Natural Language Interface** - Just talk; the agent routes to wallet, pricing, swap, analytics, and automation tools
 
 ### Technical Stack
 - **iMessage**: Spectrum-TS (Photon) for managed iMessage infrastructure
-- **Wallets**: Privy embedded wallet SDK
+- **Wallets**: Para REST SDK (MPC, no private keys in app)
 - **Agent**: Cencori (OpenAI-compatible, claude-sonnet-4.5) + local JSON memory store (`.moni-data`)
 - **Blockchain**: Viem + Base RPC
 - **DEX**: 1inch API for swap aggregation
@@ -176,7 +176,7 @@ npm run dev   # Runs interactive CLI demo
 For production iMessage deployment:
 1. Create Photon/Spectrum account at app.photon.codes
 2. Configure iMessage lines
-3. Add PROJECT_ID, PROJECT_SECRET, PRIVY_APP_ID, PRIVY_APP_SECRET, CENCORI_API_KEY (optional), BASE_RPC_URL to .env
+3. Add PROJECT_ID, PROJECT_SECRET, PARA_API_KEY, CENCORI_API_KEY (optional), BASE_RPC_URL to .env
 4. Set DEMO_MODE=false
 5. Deploy to server (Docker, Railway, Fly.io, or AtlasFlow)
 6. Health check: GET /health
@@ -191,7 +191,7 @@ For production iMessage deployment:
 | **Innovation** | iMessage-native agentic trading with proactive outbound alerts |
 | **Agentic Economy** | Cencori agent with memory, autonomous strategies, auto-executing DCA |
 | **User Experience** | Native iMessage, no app install, pure natural language |
-| **Technical Execution** | TypeScript, real 1inch+Privy execution path, testable demo, Docker/AtlasFlow |
+| **Technical Execution** | TypeScript, real 1inch+Para execution path, testable demo, Docker/AtlasFlow |
 | **Quest Compliance** | Non-US only, demo mode, deadline met |
 
 ---

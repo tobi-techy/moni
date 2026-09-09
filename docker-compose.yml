@@ -14,8 +14,8 @@ services:
       # Add your API keys here for local testing with real services
       # - PROJECT_ID=${PROJECT_ID}
       # - PROJECT_SECRET=${PROJECT_SECRET}
-      # - PRIVY_APP_ID=${PRIVY_APP_ID}
-      # - PRIVY_APP_SECRET=${PRIVY_APP_SECRET}
+      # - PARA_API_KEY=${PARA_API_KEY}
+      # - PARA_ENVIRONMENT=${PARA_ENVIRONMENT}
       # - BASE_RPC_URL=${BASE_RPC_URL}
       # - ONEINCH_API_KEY=${ONEINCH_API_KEY}
       # - LETTA_API_KEY=${LETTA_API_KEY}
@@ -38,8 +38,8 @@ services:
   #     - PORT=3000
   #     - PROJECT_ID=${PROJECT_ID}
   #     - PROJECT_SECRET=${PROJECT_SECRET}
-  #     - PRIVY_APP_ID=${PRIVY_APP_ID}
-  #     - PRIVY_APP_SECRET=${PRIVY_APP_SECRET}
+#     - PARA_API_KEY=${PARA_API_KEY}
+    #     - PARA_ENVIRONMENT=${PARA_ENVIRONMENT}
   #     - BASE_RPC_URL=${BASE_RPC_URL}
   #     - ONEINCH_API_KEY=${ONEINCH_API_KEY}
   #     - LETTA_API_KEY=${LETTA_API_KEY}

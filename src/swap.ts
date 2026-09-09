@@ -54,7 +54,7 @@ export async function getSwapQuote(
 
   try {
     const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
-    const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/quote?src=${fromToken}&dst=${toToken}&amount=${amount}&slippage=${slippage}`;
+    const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/quote?src=${fromToken}&dst=${toToken}&amount=${amount}`;
     
     const response = await fetch(url, {
       headers: {
@@ -67,8 +67,20 @@ export async function getSwapQuote(
       throw new Error(`1inch API error: ${response.status}`);
     }
 
-    const data = await response.json() as SwapQuote;
-    return data;
+    // 1inch v6.1 returns the destination amount as `dstAmount` and the gas
+    // estimate as a numeric `gas`. Normalize into the consumer-facing shape so
+    // callers can rely on `fromAmount`/`toAmount`/`estimatedGas` (with a
+    // tolerance for older `toAmount`-style responses).
+    const data = await response.json() as any;
+    return {
+      fromToken,
+      toToken,
+      fromAmount: amount,
+      toAmount: String(data?.dstAmount ?? data?.toAmount ?? data?.toTokenAmount ?? '0'),
+      estimatedGas: String(data?.gas ?? data?.estimatedGas ?? ''),
+      protocols: data?.protocols ?? [],
+      gasPrice: String(data?.gasPrice ?? '0'),
+    };
   } catch (error) {
     console.error('Error getting swap quote:', error);
     return null;
@@ -87,7 +99,7 @@ export async function getSwapTransaction(
     // Return mock transaction for demo
     return {
       from: fromAddress,
-      to: '0x1111111254EEB25477B68FB85Ed929f73A960582', // 1inch router
+      to: '0x111111125421ca6dc452d289314280a0f8842a65', // 1inch V6 router
       data: '0x',
       value: '0',
       gas: '150000',
@@ -102,32 +114,45 @@ export async function getSwapTransaction(
 
   try {
     const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
-    const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/swap`;
-    
+
+    // v6.1 /swap is a GET endpoint. `origin` is the EOA that signs/broadcasts
+    // the tx — the Para-managed wallet itself — and must equal `from`.
+    const params = new URLSearchParams({
+      src: fromToken,
+      dst: toToken,
+      amount,
+      from: fromAddress,
+      origin: fromAddress,
+      slippage: String(slippage),
+      disableEstimate: 'false',
+      allowPartialFill: 'false',
+    });
+    const url = `${ONEINCH_BASE_URL}${ONEINCH_SWAP_V6}/${chainId}/swap?${params.toString()}`;
+
     const response = await fetch(url, {
-      method: 'POST',
       headers: {
         'Authorization': `Bearer ${ONEINCH_API_KEY}`,
         'Accept': 'application/json',
-        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        src: fromToken,
-        dst: toToken,
-        amount,
-        from: fromAddress,
-        slippage,
-        disableEstimate: false,
-        allowPartialFill: false,
-      }),
     });
 
     if (!response.ok) {
       throw new Error(`1inch API error: ${response.status}`);
     }
 
-    const data = await response.json() as SwapTransaction;
-    return data;
+    // 1inch v6 returns the tx payload nested under `tx`. Unwrap it (and
+    // tolerate a flat response shape) so callers always get a complete,
+    // string-normalized SwapTransaction.
+    const data = await response.json() as any;
+    const t = data?.tx ?? data;
+    return {
+      from: t.from ?? fromAddress,
+      to: t.to,
+      data: t.data,
+      value: String(t.value ?? '0'),
+      gas: String(t.gas ?? t.gasLimit ?? '200000'),
+      gasPrice: String(t.gasPrice ?? '1000000000'),
+    };
   } catch (error) {
     console.error('Error getting swap transaction:', error);
     return null;
@@ -146,7 +171,7 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
 
   try {
     const chainId = BASE_RPC_URL.includes('sepolia') ? 84532 : 8453;
-    const url = `${ONEINCH_BASE_URL}/price/v1.1/${chainId}/${tokenAddress}`;
+    const url = `${ONEINCH_BASE_URL}/price/v1.1/${chainId}/${tokenAddress}?currency=USD`;
     
     const response = await fetch(url, {
       headers: {
@@ -159,12 +184,12 @@ export async function getTokenPrice1inch(tokenAddress: string): Promise<{ price:
       throw new Error(`1inch Price API error: ${response.status}`);
     }
 
-    const data = await response.json() as Record<string, any>;
-    // The price API returns the USD price keyed by token address, plus a timestamp.
-    const price = data[tokenAddress] ?? data.price;
-    const timestamp = data.timestamp ?? Date.now();
+// Spot Price API v1.1 with currency=USD returns the price keyed by the
+    // requested token address, e.g. { "0x833589...": "228.5" }.
+    const data = await response.json() as Record<string, unknown>;
+    const price = data[tokenAddress];
     if (typeof price !== 'string' && typeof price !== 'number') return null;
-    return { price: String(price), timestamp: Number(timestamp) };
+    return { price: String(price), timestamp: Date.now() };
   } catch (error) {
     console.error('Error getting 1inch price:', error);
     return null;
