@@ -61,16 +61,18 @@ export async function get_wallet_info(userId: string): Promise<ToolResult> {
     if (!walletAddress) {
       return {
         success: false,
-        error: 'Wallet could not be provisioned right now. The wallet service may be misconfigured or briefly unavailable - try again shortly.'
+        error: 'Wallet could not be provisioned right now. If PARA_ENVIRONMENT=PROD is set, make sure PARA_API_KEY is a production key — beta keys (sk_beta_...) are rejected by the PROD API. Otherwise retry shortly.'
       };
     }
     const chain = 'Base';
+    const isDemo = DEMO_MODE === 'true';
     return {
       success: true,
       data: {
         address: walletAddress,
         chain,
         explorer: `https://basescan.org/address/${walletAddress}`,
+        ...(isDemo ? { isDemo: true, note: 'Demo mode: this is the demo placeholder wallet. Switch DEMO_MODE=false (with a working Para API key) to get the user\'s real mainnet address.' } : {}),
       }
     };
   } catch (error) {

@@ -162,7 +162,12 @@ export async function resolveParaUser(userId: string): Promise<ParaRecord | null
 
   const store = loadParaStore();
   const cached = store[userId];
-  if (cached?.walletAddress) return cached;
+  // Live mode must never serve a cached demo placeholder (walletId 'para-demo'
+  // / DEMO_WALLET_ADDRESS) — those were written by earlier demo-mode runs and
+  // would otherwise shadow the real Para wallet forever. Re-resolve instead.
+  const isDemoRecord =
+    cached?.walletId === 'para-demo' || cached?.walletAddress === DEMO_WALLET_ADDRESS;
+  if (cached?.walletAddress && !isDemoRecord) return cached;
 
   let para: ParaRestClient;
   try {

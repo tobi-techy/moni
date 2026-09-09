@@ -10,16 +10,18 @@ export interface PortfolioAnalytics {
   riskLevel: 'low' | 'medium' | 'high';
   dailyPnL: bigint; // simulated
   allocation: Array<{ symbol: string; percentage: number; valueUSD: bigint }>;
+  recommendation?: string;
 }
 
 export async function analyzePortfolio(userId: string): Promise<PortfolioAnalytics> {
   const memory = await getTradingMemory(userId);
   const { getUserWalletAddress } = await import('./wallet.js');
-  const walletAddress = (await getUserWalletAddress(userId)) || '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4';
+  // In demo mode getUserWalletAddress returns the demo wallet; on live mode a
+  // failed resolution (null) means "not provisioned" — analyze nothing rather
+  // than silently analyzing a demo placeholder address as if it were real.
+  const walletAddress = (await getUserWalletAddress(userId));
 
-  const portfolio = await getPortfolio(walletAddress as any);
-  
-  if (portfolio.length === 0) {
+  if (!walletAddress) {
     return {
       totalValueUSD: 0n,
       totalPositions: 0,
@@ -28,8 +30,11 @@ export async function analyzePortfolio(userId: string): Promise<PortfolioAnalyti
       riskLevel: 'low',
       dailyPnL: 0n,
       allocation: [],
+      recommendation: 'Wallet is not provisioned yet — wallet provisioning has to succeed before portfolio analytics are available.',
     };
   }
+
+  const portfolio = await getPortfolio(walletAddress as any);
 
   // Calculate total value and allocation
   let totalValue = 0n;

@@ -56,6 +56,19 @@ export const PARA_REST_ENV: ParaRestEnv = PARA_REST_BASE_URL
 export const PARA_IS_PROD: boolean =
   PARA_REST_ENV === 'PROD' ||
   (typeof PARA_REST_ENV === 'object' && PARA_REST_ENV.baseUrl.replace(/\/+$/, '') === 'https://api.getpara.com');
+
+// Para API keys are environment-scoped: keys minted for BETA/SANDBOX carry
+// `_beta_`/`_sandbox_` in the key (e.g. sk_beta_...) and are rejected by the
+// production API with `invalid secret api key`. Detect the mismatch up front
+// so boot fails with a clear message instead of every wallet op failing later.
+export const PARA_API_KEY_ENVIRONMENT_UNLOCKED: boolean =
+  /_(beta|sandbox)_/i.test(PARA_API_KEY);
+
+// Human-readable env a key actually belongs to (for error messages).
+export function paraKeyEnvironment(key: string): string {
+  if (/_(beta|sandbox)_/i.test(key)) return key.includes('_sandbox_') ? 'SANDBOX' : 'BETA';
+  return 'PROD';
+}
 export const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 // True when the configured RPC points at a testnet. B20 tokenized stocks ONLY
 // exist on Base mainnet — there are no B20 contracts on Base Sepolia — so a
@@ -107,6 +120,18 @@ export function validateEnv(): { valid: boolean; missing: string[]; errors: stri
       `BASE_RPC_URL is '${BASE_RPC_URL}' (a testnet). Moni trades Coinbase B20 ` +
       `tokenized stocks, which only exist on Base mainnet. Set ` +
       `BASE_RPC_URL=https://mainnet.base.org (or unset it).`
+    );
+  }
+
+  // Para keys are environment-scoped: a BETA/SANDBOX key (`sk_beta_...`) is
+  // rejected by the production API (`invalid secret api key`), so every wallet
+  // provision/broadcast fails silently. Fail fast instead.
+  if (PARA_IS_PROD && PARA_API_KEY_ENVIRONMENT_UNLOCKED) {
+    errors.push(
+      `PARA_ENVIRONMENT is PROD but PARA_API_KEY is a ${paraKeyEnvironment(PARA_API_KEY)} key ` +
+      `(${PARA_API_KEY.slice(0, 8)}...). BETA/SANDBOX keys only work against their matching ` +
+      `env — get a production key at https://dashboard.getpara.com/keys and restart, or set ` +
+      `PARA_ENVIRONMENT=BETA to match this key.`
     );
   }
 
