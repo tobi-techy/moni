@@ -1,7 +1,6 @@
 import { createPublicClient, http, type PublicClient, type Address } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { BASE_RPC_URL, DEMO_MODE } from './env.js';
-import { getTokenPrice1inch } from './swap.js';
 import { 
   B20_TOKENS, 
   CHAINLINK_PRICE_FEEDS, 
@@ -184,7 +183,7 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bi
       }),
     ]);
 
-    const [, answer, , updatedAt] = roundData as [bigint, bigint, bigint, bigint];
+    const [, answer, , updatedAt] = roundData as readonly [bigint, bigint, bigint, bigint, bigint];
 
     return {
       price: answer,
@@ -192,35 +191,73 @@ export async function getTokenPrice(symbol: B20TokenSymbol): Promise<{ price: bi
       decimals: Number(decimals),
     };
   } catch (error) {
-    console.error(`Error fetching price for ${symbol}:`, error);
-    // Chainlink has no stock feeds on Base, so fall back to a live DEX price
-    // via 1inch, then to a static reference price.
-    return (await getPriceFrom1inch(symbol)) ?? getFallbackPrice(symbol);
+    // Chainlink has no stock feeds on Base, so source the real market price for
+    // the underlying ticker (Yahoo, keyless) and fall back to a static
+    // reference price if the live source is unreachable or the ticker isn't
+    // listed. (1inch was dropped — B20 token addresses aren't supported by the
+    // 1inch price API, so it only produced 400 errors.)
+    const live = await getLiveMarketPrice(symbol);
+    if (live) {
+      return {
+        price: live.price,
+        updatedAt: BigInt(Math.floor(live.fetchedAt / 1000)),
+        decimals: 8,
+      };
+    }
+    return getFallbackPrice(symbol);
   }
 }
 
-// Live USD price from 1inch (the DEX price for the B20 token against USDC).
-async function getPriceFrom1inch(symbol: B20TokenSymbol): Promise<{ price: bigint; updatedAt: bigint; decimals: number } | null> {
-  const address = B20_TOKENS[symbol];
-  if (!address) return null;
+// ─── Live market data (Yahoo Finance, keyless) ─────────────────────────────
+
+// B20 tokenized stocks track their underlying US ticker ~1:1, so the real
+// stock price is the honest market reference. Tickers that aren't publicly
+// listed (CRCL, SPCX) intentionally have no mapping and fall back to static.
+const MARKET_DATA_TICKERS: Partial<Record<B20TokenSymbol, string>> = {
+  AAPL: 'AAPL',
+  NVDA: 'NVDA',
+  MSFT: 'MSFT',
+  GOOGL: 'GOOGL',
+  META: 'META',
+  TSLA: 'TSLA',
+  AMZN: 'AMZN',
+  COIN: 'COIN',
+  INTC: 'INTC',
+  MSTR: 'MSTR',
+  SNDK: 'SNDK',
+};
+
+const MARKET_DATA_CACHE = new Map<string, { price: bigint; fetchedAt: number }>();
+const MARKET_DATA_TTL_MS = 30_000;
+
+async function getLiveMarketPrice(symbol: B20TokenSymbol): Promise<{ price: bigint; fetchedAt: number } | null> {
+  const cached = MARKET_DATA_CACHE.get(symbol);
+  if (cached && Date.now() - cached.fetchedAt < MARKET_DATA_TTL_MS) return cached;
+
+  const ticker = MARKET_DATA_TICKERS[symbol];
+  if (!ticker) return null;
+
   try {
-    const result = await getTokenPrice1inch(address);
-    const usd = result ? Number(result.price) : NaN;
-    if (!Number.isFinite(usd) || usd <= 0) return null;
-    // Convert the USD string to the 8-decimal format used across the app.
-    return {
-      price: BigInt(Math.round(usd * 1e8)),
-      updatedAt: BigInt(result?.timestamp ?? Math.floor(Date.now() / 1000)),
-      decimals: 8,
-    };
-  } catch (error) {
-    console.error(`Error fetching 1inch price for ${symbol}:`, error);
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } }
+    );
+    if (!response.ok) return null;
+
+    const json = await response.json() as any;
+    const price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return null;
+
+    const entry = { price: BigInt(Math.round(price * 1e8)), fetchedAt: Date.now() };
+    MARKET_DATA_CACHE.set(symbol, entry);
+    return entry;
+  } catch {
     return null;
   }
 }
 
-// Static USD fallbacks (8 decimals) so a price query never hard-fails when the
-// on-chain feed is missing or unreachable. Replace with live data in production.
+// Static USD reference prices (8 decimals) — last-resort fallback when the
+// live Yahoo chain is unreachable or the ticker isn't publicly listed.
 const FALLBACK_PRICES: Record<string, bigint> = {
   AAPL: 22800000000n,
   NVDA: 130000000000n,

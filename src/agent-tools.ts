@@ -205,7 +205,10 @@ export async function get_swap_quote(
     const quote = await getSwapQuote(fromTokenAddress, toTokenAddress, parsedAmount);
     
     if (!quote) {
-      return { success: false, error: 'Could not get quote. Please try again.' };
+      return {
+        success: false,
+        error: "Quote unavailable — tokenized stocks don't have on-chain swap liquidity yet. Try a price check or portfolio query instead."
+      };
     }
 
     const toDecimals = toTokenUpper === 'USDC' ? 6 : 18;
