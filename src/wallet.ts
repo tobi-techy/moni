@@ -30,12 +30,38 @@ export const DEMO_WALLET_ADDRESS = '0x742d35Cc6634C0532925a3b8D4C0532925a3b8D4' 
 
 let paraClient: ParaRestClient | null = null;
 
+function resolveParaEnv(): 'PROD' | 'BETA' | 'SANDBOX' | { baseUrl: string } {
+  const raw = PARA_ENVIRONMENT;
+  if (raw && typeof raw === 'object' && 'baseUrl' in raw) {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      throw new Error('Para credentials not configured. Set PARA_ENVIRONMENT in .env (PROD, BETA, SANDBOX)');
+    }
+    const upper = trimmed.toUpperCase();
+    const VALID_ENVS = ['PROD', 'BETA', 'SANDBOX'] as const;
+    const matched = VALID_ENVS.find(e => e === upper);
+    if (matched) {
+      return matched;
+    }
+    if (/^https?:\/\//.test(trimmed)) {
+      return { baseUrl: trimmed };
+    }
+    throw new Error(
+      `Invalid PARA_ENVIRONMENT '${raw}'. Expected PROD, BETA, or SANDBOX (or a baseUrl object like { baseUrl: 'https://...' }).`
+    );
+  }
+  throw new Error('Invalid PARA_ENVIRONMENT value.');
+}
+
 export function getParaClient(): ParaRestClient {
   if (!paraClient) {
     if (!PARA_API_KEY) {
       throw new Error('Para credentials not configured. Set PARA_API_KEY in .env');
     }
-    paraClient = new ParaRestClient({ apiKey: PARA_API_KEY, env: PARA_ENVIRONMENT });
+    paraClient = new ParaRestClient({ apiKey: PARA_API_KEY, env: resolveParaEnv() });
     if (process.env.NODE_ENV === 'production' && PARA_ENVIRONMENT !== 'PROD') {
       console.warn(
         `[Para] PARA_ENVIRONMENT is '${PARA_ENVIRONMENT}' but NODE_ENV=production. ` +
