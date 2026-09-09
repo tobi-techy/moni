@@ -188,9 +188,10 @@ export async function runSessionTurn(
     }
     if (!stream) throw new FriendlyAgentError("My AI connection didn't return a response stream.");
 
-    let output = '';
-    let toolCalls = 0;
+  let output = '';
+  let toolCalls = 0;
 
+  try {
     for (;;) {
       let paused = false;
       let terminated = false;
@@ -211,6 +212,7 @@ export async function runSessionTurn(
               );
             }
             const args = normalizeToolArgs(p.arguments, tool);
+            console.log('[agent] Tool call requested:', tool, JSON.stringify(args));
             const result = await execute(tool, args);
             toolCalls++;
             stream = await sessions.approveStream(sessionId, {
@@ -259,13 +261,23 @@ export async function runSessionTurn(
         throw new FriendlyAgentError("My AI connection ended the turn unexpectedly — try again.");
       }
     }
+  } catch (error: any) {
+    // Surface a clean user-facing message and let the outer retry loop give
+    // transient provider rate-limits/circuits a chance to cool. Auto-retry is
+    // suppressed once any tool has executed so a trade is never double-fires.
+    if (error instanceof FriendlyAgentError) throw error;
+    const raw = error?.message || String(error);
+    const friendly: any = new FriendlyAgentError(friendlyMessage(raw));
+    if (retryable(raw) && toolCalls === 0) friendly.retryable = true;
+    throw friendly;
+  }
   };
 
   // Transient provider hiccups (rate limits, circuit open, overload) get a few
   // bounded retries with backoff before surfacing a friendly error. Turning a
   // tool call into a retry is intentionally prevented (see runAttempt).
   const MAX_TURN_ATTEMPTS = 3;
-  const TURN_RETRY_BACKOFF_MS = [1200, 3500];
+  const TURN_RETRY_BACKOFF_MS = [4000, 12000];
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < MAX_TURN_ATTEMPTS; attempt++) {
