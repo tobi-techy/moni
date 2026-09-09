@@ -56,6 +56,30 @@ async function ensureApproval(
 }
 
 // Portfolio & Market Data Tools
+export async function get_wallet_info(userId: string): Promise<ToolResult> {
+  try {
+    // Resolves (and provisions if needed) the user's Para EVM wallet.
+    const walletAddress = await getUserWalletAddress(userId);
+    if (!walletAddress) {
+      return {
+        success: false,
+        error: 'Wallet could not be provisioned right now. The wallet service may be misconfigured or briefly unavailable - try again shortly.'
+      };
+    }
+    const chain = BASE_RPC_URL.includes('sepolia') ? 'Base Sepolia' : 'Base';
+    return {
+      success: true,
+      data: {
+        address: walletAddress,
+        chain,
+        explorer: `https://basescan.org/address/${walletAddress}`,
+      }
+    };
+  } catch (error) {
+    return { success: false, error: `Failed to get wallet info: ${error}` };
+  }
+}
+
 export async function get_portfolio(userId: string): Promise<ToolResult> {
   try {
     const walletAddress = await getUserWalletAddress(userId);
@@ -776,6 +800,17 @@ export async function get_portfolio_digest(userId: string): Promise<ToolResult> 
 // Tool definitions for Letta function calling
 export const TOOL_DEFINITIONS = [
   {
+    name: 'get_wallet_info',
+    description: 'Get the user\'s on-chain wallet address (provisions it automatically if needed). Use when the user asks for their wallet or address.',
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'User ID' }
+      },
+      required: ['userId']
+    }
+  },
+  {
     name: 'get_portfolio',
     description: 'Get user\'s complete portfolio with holdings, values, and total',
     parameters: {
@@ -981,6 +1016,8 @@ export type ToolName = typeof TOOL_DEFINITIONS[number]['name'];
 // Tool executor - maps tool names to functions
 export async function executeTool(name: ToolName, args: Record<string, any>): Promise<ToolResult> {
   switch (name) {
+    case 'get_wallet_info':
+      return get_wallet_info(args.userId);
     case 'get_portfolio':
       return get_portfolio(args.userId);
     case 'get_price':
