@@ -111,6 +111,8 @@ If the wallet is empty (0 USDC / 0 ETH / no B20), execute the swap segment as a 
 6. **"Set a price alert when NVDA drops below 950"** / **"Start a $50 weekly DCA into TSLA"** → automation created; the DCA honestly reports "prepared — will execute once funded" (never simulates).
 7. **"What's my portfolio worth?"** → empty-wallet answer stays honest and suggests the funding path.
 
+Showcase the native iMessage UX while you're in there: portfolio/price lookups also render **BaseScan rich-link preview cards** per asset (tap to view token details on-chain), and quote confirmations arrive as **tap-to-answer polls** whose answer flows straight back into the agent (which then executes and narrates the result).
+
 Closing line for the video: "Every number you've seen is real — live prices, live quotes, a live provisioned wallet. Moni is built so it physically cannot fabricate a trade, which is exactly what you want managing money."
 
 ---
@@ -124,7 +126,7 @@ Closing line for the video: "Every number you've seen is real — live prices, l
 Moni is an agentic trading application that brings Coinbase Tokenized Stocks (B20 standard) on Base to iMessage. Users trade tokenized stocks (AAPL, NVDA, MSFT, GOOGL, META, TSLA, etc.) by simply texting an AI agent - no apps, no command syntax. The agent manages portfolios, runs autonomous strategies (DCA auto-execution, stop-loss/take-profit, rebalancing), sends proactive alerts when the market moves, and answers questions with full conversation memory.
 
 ### Key Features
-1. **iMessage-Native Trading** - Trade by texting; the agent initiates conversations too
+1. **iMessage-Native Trading** - Trade by texting; the agent initiates conversations too; asset links render as rich preview cards and confirmations use tap-to-answer polls
 2. **Coinbase Tokenized Stocks (B20)** - 14 tokenized stocks on Base
 3. **Conversational Financial Agent** - Cencori-powered (gpt-4o-mini) with tool calling and persistence
 4. **Proactive Monitoring** - Unsolicited price/portfolio alerts and daily digest
