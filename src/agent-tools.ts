@@ -8,6 +8,7 @@ import { getUserWalletAddress, getUserWalletClient } from './wallet.js';
 import { addTransaction, Transaction, getTransactionHistory } from './history.js';
 import { DEMO_MODE } from './env.js';
 import { ERC20_ABI, B20_DECIMALS } from './constants.js';
+import { BUILDER_CODE_DATA_SUFFIX } from './builder-code.js';
 import { type Address, type Chain, type LocalAccount, type PublicClient, type Transport, type WalletClient, encodeFunctionData } from 'viem';
 
 // Tool result types
@@ -44,7 +45,11 @@ async function ensureApproval(
       functionName: 'approve',
       args: [spender, amount],
     });
-    const hash = await walletClient.sendTransaction({ to: token, data });
+    const hash = await walletClient.sendTransaction({
+      to: token,
+      data,
+      dataSuffix: BUILDER_CODE_DATA_SUFFIX,
+    });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return receipt.status === 'success';
   } catch (error) {
@@ -397,6 +402,7 @@ export async function execute_trade(userId: string, quoteId: string): Promise<To
     const txHash = await walletClient.sendTransaction({
       to: swapTx.to as Address,
       data: swapTx.data as `0x${string}`,
+      dataSuffix: BUILDER_CODE_DATA_SUFFIX,
       value: BigInt(swapTx.value || '0'),
       gas: BigInt(swapTx.gas || '200000'),
       chain: walletClient.chain,
