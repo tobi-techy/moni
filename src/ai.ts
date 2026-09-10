@@ -228,8 +228,10 @@ async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse
     if (response.status === 401 || response.status === 403) {
       throw new FriendlyAgentError("The AI provider rejected my API key — whoever runs me should check the OPENROUTER_API_KEY.");
     }
-    if (/model not found|invalid model|unknown model/i.test(msg)) {
-      throw new FriendlyAgentError("That AI model isn't accepted by the provider — check OPENROUTER_MODEL.");
+    if (response.status === 404 || /model not found|invalid model|unknown model|does not exist/i.test(msg)) {
+      throw new FriendlyAgentError(
+        `The AI model '${payload.model}' isn't available on this provider (OpenRouter rotates free tiers). Ask whoever runs me to set OPENROUTER_MODEL to a live model — e.g. google/gemma-4-31b-it:free.`
+      );
     }
     throw new FriendlyAgentError(`The AI provider returned ${response.status}. Try again in a few seconds.`);
   }
