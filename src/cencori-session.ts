@@ -234,6 +234,13 @@ export async function runSessionTurn(
                 ? raw
                 : raw?.text ?? raw?.content ?? raw?.message?.content ?? raw?.output_text ?? '';
             if (text && !output.includes(String(text))) output += text;
+            // Diagnostic: log which model the backend actually ran + outcome.
+            const meta: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(ev.data ?? {})) {
+              if (k === 'output' || k === 'output_text' || k === 'text' || k === 'content') continue;
+              meta[k] = v;
+            }
+            console.log('[agent] turn completed', JSON.stringify(meta));
             terminated = true;
             break;
           }
