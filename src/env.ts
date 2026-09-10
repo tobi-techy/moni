@@ -89,11 +89,12 @@ export const BASE_RPC_FALLBACKS: string[] = (
   .filter(Boolean);
 export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || '';
 export const CENCORI_API_KEY = process.env.CENCORI_API_KEY || '';
-// Model for live agent turns. NOTE: the model must be one the Cencori plan/key
-// actually supports. Verified reachable on the standard plan: gpt-4o-mini.
-// gpt-4o returns internal_error (circuit opens), google returns
-// pricing_unavailable, claude-sonnet-4.5 returns provider_invalid_request.
-export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gpt-4o-mini';
+// Model for live agent turns. NOTE: must be one the Cencori plan/key supports.
+// The Cencori dashboard shows the active plan actually serves Google models
+// (gemini-2.5-flash-lite 71%, gemini-2.5-flash 16%) while its OpenAI provider
+// circuit frequently opens/quota-exhausts. So default to the highest-headroom
+// Google model identifier. Override with CENCORI_MODEL if routing changes.
+export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gemini-2.5-flash-lite';
 // Live transport: 'session' = durable Sessions API (pause/approve for tool calls),
 // 'gateway' = stateless ai.chat (function calling only on plans that support it).
 export const CENCORI_TRANSPORT = process.env.CENCORI_TRANSPORT || 'session';
