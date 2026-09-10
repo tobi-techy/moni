@@ -193,6 +193,124 @@ type ModelCallPayload = {
   temperature: number;
 };
 
+// Some free models (e.g. the Nvidia nemotron / gemma free tiers on OpenRouter)
+// respond to tool requests by writing a JSON tool-call into `content` instead
+// of the native `tool_calls` field. We recover those so trading tools still
+// execute. Matching is strict against OUR tool names — never a guessed name.
+type ToolResultSummary = {
+  tool: string;
+  args: Record<string, any>;
+  result: any;
+};
+
+// When the model loops or exhausts its turn budget, build a plain-language
+// answer straight from the tool results we already collected, so the user
+// still gets a useful reply instead of "going in circles".
+function synthesizeToolAnswer(userMessage: string, calls: ToolResultSummary[]): string {
+  const parts: string[] = [];
+
+  for (const call of calls) {
+    const { tool, args, result } = call;
+    if (!result) continue;
+
+    if (tool === 'get_price' && result.success) {
+      const d = result.data;
+      parts.push(`${d.symbol} is trading at $${Number(d.price).toFixed(2)} right now.`);
+    } else if ((tool === 'get_portfolio' || tool === 'get_wallet_info') && result.success) {
+      const d = result.data;
+      if (Array.isArray(d) && d.length === 0) {
+        parts.push('Your portfolio is currently empty. Your wallet address is ready whenever you want to trade.');
+      } else if (Array.isArray(d)) {
+        const total = d.reduce((s: bigint, h: any) => s + (h.valueUSD ?? 0n), 0n);
+        const tokens = d.map((h: any) => `${h.symbol} ${formatUSD(h.valueUSD)}`).join(', ');
+        parts.push(`Your portfolio is worth ${formatUSD(total)} total (${tokens}).`);
+      } else if (d?.walletAddress) {
+        parts.push(`Your wallet is ${d.walletAddress.slice(0, 6)}...${d.walletAddress.slice(-4)}.`);
+      }
+    } else if (tool === 'get_swap_quote' && result.success) {
+      const d = result.data;
+      if (d) parts.push(d.message || 'I found a quote for you — it has been saved as a pending quote.');
+    } else if (result.error) {
+      parts.push(`${tool}: ${String(result.error).slice(0, 120)}`);
+    }
+  }
+
+  if (parts.length > 0) {
+    return `Let me answer from what I found: ${parts.join(' ')} ${parts.length > 1 ? '' : ''}`.trim();
+  }
+  return "I'm going in circles trying to figure that out. Let me try a simpler approach: can you rephrase?";
+}
+
+function recoverToolCallsFromContent(
+  content: string
+): NonNullable<ChatResponse['toolCalls']> | undefined {
+  if (!content) return undefined;
+  const known = new Set(TOOL_DEFINITIONS.map(t => t.name));
+
+  const parseThenExtract = (parsed: any): NonNullable<ChatResponse['toolCalls']> | undefined => {
+    // Some models double-wrap tool calls as [[{...}]] — flatten nested arrays.
+    while (Array.isArray(parsed) && parsed.length === 1 && Array.isArray(parsed[0])) {
+      parsed = parsed[0];
+    }
+
+    const toToolCall = (item: any): NonNullable<ChatResponse['toolCalls']>[number] | undefined => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) return undefined;
+      const name =
+        typeof item.name === 'string' ? item.name : typeof item.function?.name === 'string' ? item.function?.name : undefined;
+      if (!known.has(name)) return undefined;
+      const rawArgs = item.arguments ?? item.parameters ?? item.function?.arguments ?? '{}';
+      const argsStr = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs ?? {});
+      return {
+        id: `call_${Math.random().toString(36).slice(2)}`,
+        type: 'function',
+        function: { name, arguments: argsStr },
+      };
+    };
+
+    if (Array.isArray(parsed)) {
+      const calls = parsed.map(toToolCall).filter(Boolean) as NonNullable<ChatResponse['toolCalls']>;
+      return calls.length > 0 ? calls : undefined;
+    }
+    const single = toToolCall(parsed);
+    if (single) return [single];
+    return undefined;
+  };
+
+  const trimmed = content.trim();
+
+  // Strategy 1: parse the content as-is.
+  try {
+    const out = parseThenExtract(JSON.parse(trimmed));
+    if (out) return out;
+  } catch {
+    /* fall through */
+  }
+
+  // Strategy 2: some models truncate trailing brackets ([[{...}] missing a ]
+  // or }), or prepend prose. Try progressively trimming leading prose and
+  // repairing unbalanced brackets and loop until JSON.parse succeeds.
+  const starts = [trimmed];
+  const firstBrace = trimmed.search(/[\[{]/);
+  if (firstBrace > 0) starts.push(trimmed.slice(firstBrace));
+  for (const raw of starts) {
+    if (!raw) continue;
+    for (let depth = 0; depth < 4; depth++) {
+      const candidate = raw + ']'.repeat(depth);
+      try {
+        const out = parseThenExtract(JSON.parse(candidate));
+        if (out) return out;
+      } catch {
+        /* deepen further */
+      }
+    }
+  }
+
+  // Strategy 3: the tool call may be embedded mid-sentence with a trailing
+  // explanation appended after the JSON (e.g. "...AAPL\"}}. So I'd estimate..."),
+  // which can never parse. Instead, bail — do not guess a tool name.
+  return undefined;
+}
+
 // OpenAI-compatible /chat/completions (OpenRouter free models, Gemini, etc).
 // Returns a ChatResponse in the same shape Cencori's gateway returns so the
 // multi-turn tool loop is fully provider-agnostic.
@@ -203,6 +321,19 @@ async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse
     );
   }
 
+  // OpenAI API uses snake_case: tool_choice, not camelCase toolChoice.
+  // Also, some free models on OpenRouter don't support tool_choice: 'required',
+  // so fall back to 'auto' to avoid 400 errors.
+  const body: Record<string, any> = {
+    model: payload.model,
+    messages: payload.messages,
+    tools: payload.tools,
+    temperature: payload.temperature,
+  };
+  if (payload.toolChoice === 'required') {
+    body.tool_choice = 'required';
+  }
+
   let response: Response;
   try {
     response = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
@@ -211,7 +342,7 @@ async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse
         'Content-Type': 'application/json',
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
     });
   } catch (error: any) {
     throw new FriendlyAgentError(
@@ -220,9 +351,14 @@ async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse
   }
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    const msg = `${response.status} ${body.slice(0, 200)}`.toLowerCase();
+    const errBody = await response.text().catch(() => '');
+    const msg = `${response.status} ${errBody.slice(0, 300)}`.toLowerCase();
     if (response.status === 429 || /rate limit|quota|too many/i.test(msg)) {
+      if (/free-models-per-day|free tier daily|daily limit|credits to unlock/i.test(msg)) {
+        throw new FriendlyAgentError(
+          "My AI provider's free tier is out of daily requests for today. Whoever runs me should add credits on OpenRouter (a couple of dollars) or wait for the daily reset."
+        );
+      }
       throw new FriendlyAgentError('The AI provider is rate-limiting me — give it a minute and try again.');
     }
     if (response.status === 401 || response.status === 403) {
@@ -230,10 +366,15 @@ async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse
     }
     if (response.status === 404 || /model not found|invalid model|unknown model|does not exist/i.test(msg)) {
       throw new FriendlyAgentError(
-        `The AI model '${payload.model}' isn't available on this provider (OpenRouter rotates free tiers). Ask whoever runs me to set OPENROUTER_MODEL to a live model — e.g. google/gemma-4-31b-it:free.`
+        `The AI model '${payload.model}' isn't available on this provider (OpenRouter rotates free tiers). Ask whoever runs me to set OPENROUTER_MODEL to a live model — e.g. openrouter/free.`
       );
     }
-    throw new FriendlyAgentError(`The AI provider returned ${response.status}. Try again in a few seconds.`);
+    if (/tool_choice|tool.choice|tools_not_supported/i.test(msg)) {
+      throw new FriendlyAgentError(
+        'This model doesn\'t support forced tool calling. Ask whoever runs me to set OPENROUTER_MODEL to a model with tool support — e.g. openrouter/free.'
+      );
+    }
+    throw new FriendlyAgentError(`The AI provider returned ${response.status}. ${errBody.slice(0, 150)}`);
   }
 
   const data: any = await response.json();
@@ -269,17 +410,32 @@ async function chatWithModel(payload: ModelCallPayload): Promise<ChatResponse> {
   return getCencori().ai.chat(payload);
 }
 
-// ─── Cencori call with one retry (transient API hiccups) ───────────────────
+// ─── Cencori call with retries (transient API hiccups + free-tier 429s) ────
 
 async function chatWithRetry(payload: ModelCallPayload): Promise<ChatResponse> {
+  const MAX_ATTEMPTS = 3;
+  const BACKOFF_MS = [1500, 5000];
+  let lastError: Error | null = null;
+
   const attempt = () => chatWithModel(payload);
-  try {
-    return await attempt();
-  } catch (error: any) {
-    console.warn('AI model call failed, retrying once...', (error as Error)?.message);
-    await new Promise(resolve => setTimeout(resolve, 700));
-    return await attempt();
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    try {
+      return await attempt();
+    } catch (error: any) {
+      lastError = error;
+      const msg = String(error?.message || error).toLowerCase();
+      // Rate-limits/quota on free tiers deserve a patient retry; hard errors
+      // (bad key, 404 model, tool_choice unsupported) shouldn't be retried.
+      const retryable = /rate[- ]?limit|quota|429|too many|overload|5\d\d|temporari|unavailable|fetch failed|timed out|circuit/i.test(msg);
+      if (!retryable || i === MAX_ATTEMPTS - 1) {
+        console.warn('AI model call failed', { attempt: i + 1, error: error?.message });
+        break;
+      }
+      console.warn(`AI model call failed (${i + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[i]}ms...`, error?.message);
+      await new Promise(resolve => setTimeout(resolve, BACKOFF_MS[i] ?? 2000));
+    }
   }
+  throw lastError;
 }
 
 // ─── User snapshot injected each request so the agent actually "knows" them ─
@@ -491,6 +647,11 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
 
   let turns = 6;
 
+  // Cycle guard: weak free models sometimes re-request the exact same tool
+  // call forever after receiving its result. Track executed (tool, args) and
+  // if one repeats, synthesize the reply from the results we already have.
+  const executedCalls = new Map<string, ToolResultSummary>();
+
   while (turns-- > 0) {
     const response = await chatWithRetry({
       model: effectiveAIModel(),
@@ -500,18 +661,27 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
       temperature: 0.3,
     });
 
+    console.log(`[agent] turn response: finish=${response.finishReason} toolCalls=${response.toolCalls?.length ?? 0} content=${JSON.stringify(response.content ?? '').slice(0, 150)}`);
+
     // Persistent history: record user message on the first turn
     if (turns === 5) {
       history.push({ role: 'user', content: userMessage });
     }
 
-    // No tool calls — final answer
+    // No native tool calls — but some free models write a JSON tool-call into
+    // `content` instead. Recover those before treating it as a final answer.
     if (!response.toolCalls || response.toolCalls.length === 0) {
-      const content = sanitizeOutgoingText(response.content || "I'm not sure what to say. Try rephrasing that.");
-      history.push({ role: 'assistant', content });
-      historyStore[userId] = history;
-      saveHistory(historyStore);
-      return content;
+      const recovered = recoverToolCallsFromContent(response.content || '');
+      if (recovered && recovered.length > 0) {
+        console.log('[agent] recovered tool calls from content:', JSON.stringify(recovered));
+        response.toolCalls = recovered;
+      } else {
+        const content = sanitizeOutgoingText(response.content || "I'm not sure what to say. Try rephrasing that.");
+        history.push({ role: 'assistant', content });
+        historyStore[userId] = history;
+        saveHistory(historyStore);
+        return content;
+      }
     }
 
     // Record assistant turn with tool calls
@@ -534,8 +704,26 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
       }
       args.userId = userId;
 
+      const key = `${name}:${JSON.stringify(Object.keys(args).sort().map(k => [k, String(args[k])]))}`;
+      // If this exact call already ran and produced a result, the model is
+      // looping. Stop executing tools and answer from collected results.
+      if (executedCalls.has(key)) {
+        const answer = synthesizeToolAnswer(userMessage, Array.from(executedCalls.values()));
+        console.warn('[agent] tool call cycle detected, answering from results:', key);
+        history.push({ role: 'assistant', content: answer });
+        historyStore[userId] = history;
+        saveHistory(historyStore);
+        return answer;
+      }
+
       const { executeTool } = await import('./agent-tools.js');
       const result = await executeTool(name as ToolName, args);
+
+      executedCalls.set(key, {
+        tool: name,
+        args: { ...args, userId },
+        result,
+      });
 
       const toolTurn: AgentMessage = {
         role: 'tool',
@@ -545,6 +733,16 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
       history.push(toolTurn);
       messages.push(toolTurn);
     }
+  }
+
+  // Exhausted the turn budget — answer from whatever we collected.
+  const collected = Array.from(executedCalls.values());
+  if (collected.length > 0) {
+    const answer = synthesizeToolAnswer(userMessage, collected);
+    history.push({ role: 'assistant', content: answer });
+    historyStore[userId] = history;
+    saveHistory(historyStore);
+    return answer;
   }
 
   const fallback = "I'm going in circles trying to figure that out. Let me try a simpler approach: can you rephrase?";

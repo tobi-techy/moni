@@ -1,4 +1,5 @@
 // Centralized environment variable access
+import 'dotenv/config';
 import { base, type Chain } from 'viem/chains';
 export const PROJECT_ID = process.env.PROJECT_ID || '';
 export const PROJECT_SECRET = process.env.PROJECT_SECRET || '';
@@ -108,11 +109,13 @@ export type AIProvider = 'cencori' | 'openrouter';
 
 export const AI_PROVIDER: AIProvider = process.env.AI_PROVIDER === 'openrouter' ? 'openrouter' : 'cencori';
 
-// OpenRouter free-tier models with tool/function-calling support as of the
-// model rotation (google/gemini-2.5-flash-lite:free was delisted). Default to
-// Google-family via OpenRouter. Override per bot.
+// OpenRouter free-tier models with tool/function-calling support rotate
+// frequently (google/gemma-4-31b-it:free has been delisted). `openrouter/free`
+// is OpenRouter's router that automatically picks a free model supporting the
+// request's features (including tool calling), so it degrades far more
+// gracefully than pinning a single :free model. Override per bot.
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
 // Base URL of any OpenAI-compatible API (default OpenRouter).
 export const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 // Alternate key (e.g. Gemini GEMINI_API_KEY) used when OPENAI_BASE_URL is a
