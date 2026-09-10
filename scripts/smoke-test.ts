@@ -72,7 +72,15 @@ async function main() {
     result('resolve: PARA_API_KEY set — live wallet logic untested here (see live-check)', true);
   }
 
-  // 4. Live agent loop only when the provider + keys are configured
+  // 4. Live agent loop only when a provider + keys are configured
+  if (process.env.OPENROUTER_API_KEY) {
+    const { sendAgentMessage } = await import('../src/ai.js');
+    const reply = await sendAgentMessage(user, 'What is the price of AAPL?');
+    result('openrouter: replies over live provider', reply.length > 10, reply.slice(0, 80));
+  } else {
+    result('openrouter agent loop: skipped (needs OPENROUTER_API_KEY)', true);
+  }
+
   if (process.env.CENCORI_API_KEY && process.env.PROJECT_ID) {
     const { sendAgentMessage, isFirstContact } = await import('../src/ai.js');
     result('first contact (returns true once)', (await isFirstContact(user)) === true);

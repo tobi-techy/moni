@@ -1,10 +1,17 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Cencori, type ChatResponse } from 'cencori';
-import { CENCORI_MODEL, CENCORI_TRANSPORT } from './env.js';
+import {
+  CENCORI_MODEL,
+  CENCORI_TRANSPORT,
+  AI_PROVIDER,
+  OPENROUTER_MODEL,
+  OPENAI_API_KEY,
+  OPENAI_BASE_URL,
+} from './env.js';
 import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { bigintJSONReplacer, bigintJSONReviver } from './bigint-json.js';
-import { runSessionTurn } from './cencori-session.js';
+import { runSessionTurn, FriendlyAgentError } from './cencori-session.js';
 import { sanitizeOutgoingText } from './text.js';
 import { getUserWalletAddress } from './wallet.js';
 import { getPortfolio, formatBalance, formatUSD, getB20ExplorerLink } from './base.js';
@@ -146,8 +153,13 @@ const CENCORI_TOOLS: CencoriToolDefinition[] = TOOL_DEFINITIONS.map(tool => ({
   },
 }));
 
-export function getAIConfig(): { model: string; transport: string; toolCount: number } {
-  return { model: CENCORI_MODEL, transport: CENCORI_TRANSPORT, toolCount: CENCORI_TOOLS.length };
+export function getAIConfig(): { model: string; transport: string; provider: string; toolCount: number } {
+  return {
+    provider: AI_PROVIDER,
+    model: AI_PROVIDER === 'cencori' ? CENCORI_MODEL : OPENROUTER_MODEL,
+    transport: AI_PROVIDER === 'cencori' ? CENCORI_TRANSPORT : 'openai-compat',
+    toolCount: CENCORI_TOOLS.length,
+  };
 }
 
 // ─── Cencori Client (lazy — only needed for real AI calls) ─────────────────
@@ -171,20 +183,98 @@ async function serializeTurn<T>(userId: string, fn: () => Promise<T>): Promise<T
   return run;
 }
 
-// ─── Cencori call with one retry (transient API hiccups) ───────────────────
+// ─── Model call: Cencori gateway OR any OpenAI-compatible endpoint ─────────
 
-async function chatWithRetry(payload: {
+type ModelCallPayload = {
   model: string;
   messages: AgentMessage[];
   tools: CencoriToolDefinition[];
   toolChoice: 'auto' | 'required';
   temperature: number;
-}): Promise<ChatResponse> {
-  const attempt = () => getCencori().ai.chat(payload);
+};
+
+// OpenAI-compatible /chat/completions (OpenRouter free models, Gemini, etc).
+// Returns a ChatResponse in the same shape Cencori's gateway returns so the
+// multi-turn tool loop is fully provider-agnostic.
+async function chatOpenAICompat(payload: ModelCallPayload): Promise<ChatResponse> {
+  if (!OPENAI_API_KEY) {
+    throw new FriendlyAgentError(
+      'The AI provider switch is on but no API key is set — set OPENROUTER_API_KEY (or OPENAI_API_KEY) for the AI_PROVIDER you chose.'
+    );
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error: any) {
+    throw new FriendlyAgentError(
+      `I couldn't reach the AI provider at ${OPENAI_BASE_URL} — check the URL/network. (${(error?.message || String(error)).slice(0, 120)})`
+    );
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const msg = `${response.status} ${body.slice(0, 200)}`.toLowerCase();
+    if (response.status === 429 || /rate limit|quota|too many/i.test(msg)) {
+      throw new FriendlyAgentError('The AI provider is rate-limiting me — give it a minute and try again.');
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new FriendlyAgentError("The AI provider rejected my API key — whoever runs me should check the OPENROUTER_API_KEY.");
+    }
+    if (/model not found|invalid model|unknown model/i.test(msg)) {
+      throw new FriendlyAgentError("That AI model isn't accepted by the provider — check OPENROUTER_MODEL.");
+    }
+    throw new FriendlyAgentError(`The AI provider returned ${response.status}. Try again in a few seconds.`);
+  }
+
+  const data: any = await response.json();
+  const message = data?.choices?.[0]?.message ?? {};
+  const toolCalls: NonNullable<ChatResponse['toolCalls']> = (message.tool_calls ?? []).map((tc: any) => ({
+    id: tc.id ?? `call_${Math.random().toString(36).slice(2)}`,
+    type: 'function',
+    function: {
+      name: tc.function?.name ?? '',
+      arguments: tc.function?.arguments ?? '{}',
+    },
+  }));
+  return {
+    id: data?.id ?? 'chatcmpl-local',
+    model: data?.model ?? payload.model,
+    content: typeof message.content === 'string' ? message.content ?? '' : '',
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    finishReason: data?.choices?.[0]?.finish_reason ?? 'stop',
+    usage: {
+      promptTokens: data?.usage?.prompt_tokens ?? 0,
+      completionTokens: data?.usage?.completion_tokens ?? 0,
+      totalTokens: data?.usage?.total_tokens ?? 0,
+    },
+  };
+}
+
+function effectiveAIModel(): string {
+  return AI_PROVIDER === 'cencori' ? CENCORI_MODEL : OPENROUTER_MODEL;
+}
+
+async function chatWithModel(payload: ModelCallPayload): Promise<ChatResponse> {
+  if (AI_PROVIDER !== 'cencori') return chatOpenAICompat(payload);
+  return getCencori().ai.chat(payload);
+}
+
+// ─── Cencori call with one retry (transient API hiccups) ───────────────────
+
+async function chatWithRetry(payload: ModelCallPayload): Promise<ChatResponse> {
+  const attempt = () => chatWithModel(payload);
   try {
     return await attempt();
-  } catch (error) {
-    console.warn('Cencori chat failed, retrying once...', (error as Error)?.message);
+  } catch (error: any) {
+    console.warn('AI model call failed, retrying once...', (error as Error)?.message);
     await new Promise(resolve => setTimeout(resolve, 700));
     return await attempt();
   }
@@ -381,7 +471,7 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
   const liveFacts = await buildLiveFacts(userId, userMessage);
   const fullContext = `${contextBlock}\n\n${liveFacts}`.trim();
 
-  if (CENCORI_TRANSPORT !== 'gateway') {
+  if (AI_PROVIDER === 'cencori' && CENCORI_TRANSPORT === 'session') {
     return runSessionPath(userId, userMessage, firstContact, memory, fullContext);
   }
 
@@ -401,7 +491,7 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
 
   while (turns-- > 0) {
     const response = await chatWithRetry({
-      model: CENCORI_MODEL,
+      model: effectiveAIModel(),
       messages,
       tools: CENCORI_TOOLS,
       toolChoice: requiresToolUse(userMessage) ? 'required' : 'auto',
