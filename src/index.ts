@@ -13,7 +13,7 @@ import { type Address } from 'viem';
 import { getPortfolio, getTokenPrice, getB20ExplorerLink, formatBalance, formatUSD, B20TokenSymbol, B20_TOKENS } from './base.js';
 import { B20_DECIMALS } from './constants.js';
 import { getSwapQuote, getSwapTransaction, parseAmount, formatAmount } from './swap.js';
-import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, TradingMemory } from './ai.js';
+import { sendAgentMessage, getTradingMemory, setTradingMemory, isFirstContact, getAIConfig, TradingMemory } from './ai.js';
 import { analyzePortfolio, formatAnalytics, getPriceChanges } from './analytics.js';
 import { getTransactionHistory, formatTransactionHistory, addTransaction, Transaction } from './history.js';
 import { handleStopLoss, handleRebalance, handleSentiment, checkStopLosses } from './automation.js';
@@ -1037,7 +1037,12 @@ if (hasSpectrumCredentials) {
     webhookSecret: SPECTRUM_WEBHOOK_SECRET || undefined,
   });
 
-  log.info('Moni iMessage Trading Agent started', { baseRpc: BASE_RPC_URL });
+  log.info('Moni iMessage Trading Agent started', {
+    baseRpc: BASE_RPC_URL,
+    cencoriModel: getAIConfig().model,
+    cencoriTransport: getAIConfig().transport,
+    toolCount: getAIConfig().toolCount,
+  });
 
   // Start session cleanup
   cleanupInterval = startSessionCleanup();

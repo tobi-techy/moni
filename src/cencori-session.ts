@@ -27,6 +27,8 @@ export interface SessionTurnOptions {
   tools: Array<Record<string, unknown>>;
   model?: string;
   temperature?: number;
+  /** Force the model to call a tool for this turn ('required') or let it decide ('auto'). */
+  toolChoice?: 'auto' | 'required';
 }
 
 interface SSEEvent {
@@ -171,6 +173,7 @@ export async function runSessionTurn(
       model: options.model ?? CENCORI_MODEL,
       temperature: options.temperature ?? 0.3,
       pause_on_tool_calls: true,
+      ...(options.toolChoice ? { tool_choice: options.toolChoice } : {}),
     });
 
   // A single attempt of the SSE turn. Throws a FriendlyAgentError tagged

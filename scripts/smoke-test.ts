@@ -44,8 +44,12 @@ async function main() {
     result('poll: Cancel maps to cancel', pollChoiceToToken('Cancel') === 'cancel');
     result('poll: other choices stay natural language', pollChoiceToToken('Maybe later') === null);
 
-    const { isPortfolioQuestion } = await import('../src/ai.js');
+    const { isPortfolioQuestion, requiresToolUse } = await import('../src/ai.js');
     result('facts: balance question triggers ground truth', isPortfolioQuestion('What is my balance?'));
+    result('facts: idle chatter does not trigger ground truth', !isPortfolioQuestion('Hi, how are you?'));
+    result('tools: price query forces tool use', requiresToolUse('What is the price of AAPL?'));
+    result('tools: buy intent forces tool use', requiresToolUse('I want to buy 5 NVDA'));
+    result('tools: greeting does not force tool use', !requiresToolUse('Hey whats up'));
   }
 
   // 2. B20 registry integrity
