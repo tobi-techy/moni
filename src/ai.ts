@@ -146,6 +146,10 @@ const CENCORI_TOOLS: CencoriToolDefinition[] = TOOL_DEFINITIONS.map(tool => ({
   },
 }));
 
+export function getAIConfig(): { model: string; transport: string; toolCount: number } {
+  return { model: CENCORI_MODEL, transport: CENCORI_TRANSPORT, toolCount: CENCORI_TOOLS.length };
+}
+
 // ─── Cencori Client (lazy — only needed for real AI calls) ─────────────────
 
 function getCencori(): Cencori {
@@ -173,7 +177,7 @@ async function chatWithRetry(payload: {
   model: string;
   messages: AgentMessage[];
   tools: CencoriToolDefinition[];
-  toolChoice: 'auto';
+  toolChoice: 'auto' | 'required';
   temperature: number;
 }): Promise<ChatResponse> {
   const attempt = () => getCencori().ai.chat(payload);
@@ -239,6 +243,14 @@ const PORTFOLIO_FACTS_TTL_MS = 25_000;
 
 export function isPortfolioQuestion(text: string): boolean {
   return /balance|portfolio|holding|positions?|how much (is|do|does)|wallet|value of (my|the)|what do i own|what (is|are) (my|i).*(asset|stock|token)/i.test(text);
+}
+
+// Tool-eligible intents MUST call a tool — we force `tool_choice: 'required'`
+// for these so the model cannot answer from memory instead of live data
+// (Gemini flash-lite otherwise happily narrates invented numbers).
+export function requiresToolUse(text: string): boolean {
+  if (isPortfolioQuestion(text)) return true;
+  return /price|quote|buy|sell|trade|swap|order|risk|rebalance|stop.?loss|take.?profit|watchlist|diversif|exposure|how much (is|does) .*(cost|worth)|position|broker|portfolio/i.test(text);
 }
 
 async function buildLiveFacts(userId: string, message: string): Promise<string> {
@@ -340,10 +352,15 @@ async function runSessionPath(
   const historyStore = loadHistory();
   const history = historyStore[userId] || [];
   // Strip em-dashes from the model's reply before it hits history or iMessage.
+  const toolChoice = requiresToolUse(userMessage) ? 'required' : 'auto';
+  if (toolChoice === 'required') {
+    console.log(`[agent] forcing tool use (tool_choice=required) for: ${userMessage.slice(0, 80)}`);
+  }
   const content = sanitizeOutgoingText(await runSessionTurn(userId, {
     input: userMessage,
     instructions: `${SYSTEM_PROMPT}\n\n${contextBlock}`,
     tools: CENCORI_TOOLS as unknown as Array<Record<string, unknown>>,
+    toolChoice,
   }));
 
   // Keep a local transcript too (drives isFirstContact + offline diagnostics).
@@ -387,7 +404,7 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
       model: CENCORI_MODEL,
       messages,
       tools: CENCORI_TOOLS,
-      toolChoice: 'auto',
+      toolChoice: requiresToolUse(userMessage) ? 'required' : 'auto',
       temperature: 0.3,
     });
 
