@@ -98,6 +98,25 @@ export const CENCORI_MODEL = process.env.CENCORI_MODEL || 'gemini-2.5-flash-lite
 // Live transport: 'session' = durable Sessions API (pause/approve for tool calls),
 // 'gateway' = stateless ai.chat (function calling only on plans that support it).
 export const CENCORI_TRANSPORT = process.env.CENCORI_TRANSPORT || 'session';
+
+// ─── OpenAI-compatible provider (fallback / free-tier routing) ─────────────
+// Cencori's plan-side circuits (quota on their OpenAI provider) frequently
+// block turns. Moni can instead call any OpenAI-compatible `/chat/completions`
+// endpoint directly — OpenRouter `:free` models (no credit card) or Gemini's
+// OpenAI-compat endpoint. Choose with AI_PROVIDER.
+export type AIProvider = 'cencori' | 'openrouter';
+
+export const AI_PROVIDER: AIProvider = process.env.AI_PROVIDER === 'openrouter' ? 'openrouter' : 'cencori';
+
+// OpenRouter free-tier models. `google/gemini-2.5-flash-lite:free` supports
+// function calling through OpenRouter's Google proxy. Override per bot.
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite:free';
+// Base URL of any OpenAI-compatible API (default OpenRouter).
+export const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+// Alternate key (e.g. Gemini GEMINI_API_KEY) used when OPENAI_BASE_URL is a
+// non-OpenRouter endpoint. Kept generic so we can point at any compatible host.
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || OPENROUTER_API_KEY;
 export const SPECTRUM_WEBHOOK_SECRET = process.env.SPECTRUM_WEBHOOK_SECRET || '';
 export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3001', 10);
 

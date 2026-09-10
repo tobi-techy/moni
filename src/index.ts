@@ -1039,8 +1039,9 @@ if (hasSpectrumCredentials) {
 
   log.info('Moni iMessage Trading Agent started', {
     baseRpc: BASE_RPC_URL,
+    aiProvider: getAIConfig().provider,
     cencoriModel: getAIConfig().model,
-    cencoriTransport: getAIConfig().transport,
+    aiTransport: getAIConfig().transport,
     toolCount: getAIConfig().toolCount,
   });
 
