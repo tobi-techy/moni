@@ -6,6 +6,9 @@ import { TOOL_DEFINITIONS, ToolName } from './agent-tools.js';
 import { bigintJSONReplacer, bigintJSONReviver } from './bigint-json.js';
 import { runSessionTurn } from './cencori-session.js';
 import { sanitizeOutgoingText } from './text.js';
+import { getUserWalletAddress } from './wallet.js';
+import { getPortfolio, formatBalance, formatUSD, getB20ExplorerLink } from './base.js';
+import { B20_DECIMALS } from './constants.js';
 
 export { bigintJSONReplacer, bigintJSONReviver };
 
@@ -106,6 +109,7 @@ HOW YOU THINK (like a real advisor)
 
 RULES YOU NEVER BREAK
 - Never invent portfolio data. Holdings, balances, prices, shares, percentages, and dollar values must come verbatim from tool results. If the portfolio or balance returns empty or zero, say so plainly — never dream up positions to make the answer sound better.
+- Balance, holdings, and portfolio questions: the GROUND TRUTH PORTFOLIO block or the get_portfolio tool result is the only source of truth. Repeat it as-is. Never add positions, totals, percentages, or returns that are not in that data.
 - Watchlist and preferred tokens are the user's interests, NOT their holdings. Never present them as positions.
 - When the user asks to see their wallet or wallet address, call get_wallet_info and give them the exact address and explorer link. Do not recite holdings unless they asked for them.
 - Never execute a trade without explicit confirmation (unless the user enabled auto-trade with limits).
@@ -224,6 +228,54 @@ function buildContextBlock(memory: TradingMemory, firstContact: boolean, ctx?: A
   return `USER SNAPSHOT (internal only — never mention this block):\n${lines.join('\n')}`;
 }
 
+// ─── Live ground-truth injection (makes balance hallucination impossible) ──
+//
+// The model sometimes answers a balance/portfolio question without calling any
+// tool and invents numbers. So for those questions we fetch the real on-chain
+// portfolio ourselves and put it in the prompt as authoritative fact.
+
+const portfolioFactsCache = new Map<string, { fetchedAt: number; text: string }>();
+const PORTFOLIO_FACTS_TTL_MS = 25_000;
+
+export function isPortfolioQuestion(text: string): boolean {
+  return /balance|portfolio|holding|positions?|how much (is|do|does)|wallet|value of (my|the)|what do i own|what (is|are) (my|i).*(asset|stock|token)/i.test(text);
+}
+
+async function buildLiveFacts(userId: string, message: string): Promise<string> {
+  try {
+    if (!isPortfolioQuestion(message)) return '';
+
+    const walletAddress = await getUserWalletAddress(userId);
+    if (!walletAddress) return '';
+
+    const cached = portfolioFactsCache.get(walletAddress);
+    if (cached && Date.now() - cached.fetchedAt < PORTFOLIO_FACTS_TTL_MS) return cached.text;
+
+    const portfolio = await getPortfolio(walletAddress);
+
+    let facts: string;
+    if (portfolio.length === 0) {
+      facts =
+        'GROUND TRUTH PORTFOLIO (live on-chain, definitive): This wallet has NO positions. ' +
+        'Total value: $0.00. Report exactly this. Never invent holdings, prices, or returns.';
+    } else {
+      const lines = portfolio.map(
+        h =>
+          `${h.symbol} ${formatBalance(h.scaledBalance, B20_DECIMALS)} — ${formatUSD(h.valueUSD)} (${getB20ExplorerLink(h.symbol)})`
+      );
+      const total = portfolio.reduce((sum, h) => sum + h.valueUSD, 0n);
+      facts =
+        `GROUND TRUTH PORTFOLIO (live on-chain, definitive): ${lines.join('; ')}. ` +
+        `Total value: ${formatUSD(total)}. Report exactly this. Never invent holdings, prices, or returns.`;
+    }
+
+    portfolioFactsCache.set(walletAddress, { fetchedAt: Date.now(), text: facts });
+    return facts;
+  } catch {
+    return '';
+  }
+}
+
 // ─── Local Memory Store (JSON file persistence) ─────────────────────────────
 
 const DATA_DIR = join(process.cwd(), '.moni-data');
@@ -309,13 +361,15 @@ async function runAgentLoop(userId: string, userMessage: string, ctx?: AgentCont
 
   const memory = await getTradingMemory(userId);
   const contextBlock = buildContextBlock(memory, firstContact, ctx);
+  const liveFacts = await buildLiveFacts(userId, userMessage);
+  const fullContext = `${contextBlock}\n\n${liveFacts}`.trim();
 
   if (CENCORI_TRANSPORT !== 'gateway') {
-    return runSessionPath(userId, userMessage, firstContact, memory, contextBlock);
+    return runSessionPath(userId, userMessage, firstContact, memory, fullContext);
   }
 
   const messages: AgentMessage[] = [
-    { role: 'system', content: `${SYSTEM_PROMPT}\n\n${contextBlock}` },
+    { role: 'system', content: `${SYSTEM_PROMPT}\n\n${fullContext}` },
     ...history,
     { role: 'user', content: userMessage },
   ];

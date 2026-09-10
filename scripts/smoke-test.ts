@@ -43,6 +43,9 @@ async function main() {
     result('poll: Confirm maps to confirm', pollChoiceToToken('Confirm') === 'confirm');
     result('poll: Cancel maps to cancel', pollChoiceToToken('Cancel') === 'cancel');
     result('poll: other choices stay natural language', pollChoiceToToken('Maybe later') === null);
+
+    const { isPortfolioQuestion } = await import('../src/ai.js');
+    result('facts: balance question triggers ground truth', isPortfolioQuestion('What is my balance?'));
   }
 
   // 2. B20 registry integrity
