@@ -108,10 +108,11 @@ export type AIProvider = 'cencori' | 'openrouter';
 
 export const AI_PROVIDER: AIProvider = process.env.AI_PROVIDER === 'openrouter' ? 'openrouter' : 'cencori';
 
-// OpenRouter free-tier models. `google/gemini-2.5-flash-lite:free` supports
-// function calling through OpenRouter's Google proxy. Override per bot.
+// OpenRouter free-tier models with tool/function-calling support as of the
+// model rotation (google/gemini-2.5-flash-lite:free was delisted). Default to
+// Google-family via OpenRouter. Override per bot.
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite:free';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
 // Base URL of any OpenAI-compatible API (default OpenRouter).
 export const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 // Alternate key (e.g. Gemini GEMINI_API_KEY) used when OPENAI_BASE_URL is a
